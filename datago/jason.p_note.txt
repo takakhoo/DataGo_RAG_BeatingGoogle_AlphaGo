@@ -1,0 +1,148 @@
+https://katagotraining.org/ ~> for models
+
+NOTE: Emperically test results for models. Note: Consider using pUCT, or augmented pUCT without epxloration bias,
+or multi point entropy + one of the above options for RAG database choice pull.
+
+NOTE: Is there a way to analyze games visually from game state? If so, find tool for it - would be very useful!
+
+
+note: absval/relU for KL divergence
+
+
+
+
+
+
+I'll explain each parameter stored in the GoStateEmbedding class and what it's used for in Go game analysis:
+1. Position Identifiers
+state_hash (line 20)
+A 128-bit hash uniquely identifying this exact board position
+Used for: Deduplication, cache lookups, detecting if you've seen this position before
+Example: Two games reaching the same position will have identical hashes
+sym_hash (line 75)
+Hash that's identical for symmetrically equivalent positions
+Used for: Detecting positions that are rotations/reflections of each other (e.g., top-right corner opening vs top-left)
+Important for: Reducing redundant analysis of equivalent positions
+2. Neural Network Probability Distributions
+policy (line 24)
+Array of 362 floats (361 board points + 1 pass move)
+Contains: Neural net's raw probability distribution for next moves
+Used for:
+Seeing what moves the AI considers before search
+Training data for other models
+Move suggestions
+Understanding tactical/strategic hotspots
+ownership (line 27)
+Array of 361 floats (one per board point)
+Values range: -1.0 (definitely White's) to +1.0 (definitely Black's)
+Used for:
+Predicting final territory ownership
+Visualizing likely game outcome
+Identifying contested areas vs settled territory
+3. Position Evaluation (Post-Search)
+winrate (line 32) - marked "REMOVE" in your comments
+Float between 0.0 and 1.0
+Current player's probability of winning
+Used for: Main evaluation metric, position comparison
+score_lead (line 35)
+Float (can be negative)
+Expected point advantage for current player
+Used for:
+More granular than winrate
+Understanding margin of advantage
+Detecting "winning but only by 0.5 points" situations
+utility (line 38)
+KataGo's internal utility metric
+Combines winrate and score considerations
+Used for:
+Decision-making during search
+More nuanced than pure winrate (accounts for risk)
+score_stdev (line 42) - marked "??"
+Standard deviation of predicted final score
+Used for:
+Measuring position uncertainty/volatility
+High value = outcome still unclear
+Low value = outcome fairly certain
+score_selfplay (line 46)
+Expected score under perfect self-play
+Used for: More accurate score prediction than score_lead
+4. Raw Neural Net Outputs (Pre-Search)
+raw_winrate (line 48)
+Neural net's immediate winrate prediction before MCTS search
+Used for: Comparing neural net intuition vs search-refined evaluation
+raw_score_lead (line 49)
+Neural net's immediate score prediction
+Used for: Seeing if search changes the neural net's initial assessment
+raw_score_stdev (line 50)
+Neural net's uncertainty estimate
+Used for: Understanding if position looks clear or complex to the neural net
+5. Search Statistics
+visits (line 54)
+Number of MCTS simulations performed
+Used for:
+Confidence indicator (more visits = more reliable)
+Computational cost tracking
+Determining if analysis is deep enough
+lcb (line 58) - marked "??"
+Lower Confidence Bound on winrate
+Used for:
+Pessimistic evaluation (worst-case scenario)
+Decision-making under uncertainty
+Useful for time management in games
+6. Game Context Metadata
+turn_number (line 62)
+Which move number this is in the game
+Used for:
+Tracking game phase (opening/middle/endgame)
+Temporal ordering of positions
+player_to_move (line 65)
+"B" (Black) or "W" (White)
+Used for: Knowing whose perspective the evaluation is from
+komi (line 67)
+Compensation points for White (typically 6.5 or 7.5)
+Used for: Essential for accurate evaluation
+rules (line 68)
+Rule set: "chinese", "japanese", "tromp-taylor", etc.
+Used for: Scoring differences affect evaluation
+board_size_x / board_size_y (lines 69-70)
+Board dimensions (usually 19x19, but can be 9x9, 13x13, etc.)
+Used for: Interpreting policy/ownership arrays correctly
+query_id (line 79)
+Unique identifier for this analysis request
+Used for: Matching responses to requests when doing batch analysis
+Your Comments Indicate Questions:
+"## REMOVE" on winrate (line 31) - This is actually one of the most important metrics. Don't remove it unless you're using utility or score_lead exclusively.
+"??" on score_stdev (line 41) and lcb (line 57) - These are advanced metrics for uncertainty quantification. Useful for RAG systems to filter out low-confidence positions
+"look into this" on sym_hash (line 74) - This is very valuable for deduplication in your RAG system. Without it, you'd store 8 copies of symmetric positions (4 rotations × 2 reflections).
+
+
+
+
+
+
+---------
+
+
+
+chaos_score = (
+    w1 * normalize(score_stdev, min=5, max=50) +           # Primary: outcome variance
+    w2 * normalize(confidence_gap, min=0, max=0.15) +      # Search uncertainty (winrate - lcb)
+    w3 * normalize(policy_entropy, min=1, max=3) +         # Move diversity
+    w4 * normalize(nn_divergence, min=0, max=0.3) +        # NN vs search disagreement
+    w5 * normalize(raw_score_stdev, min=5, max=50)         # Raw NN uncertainty
+)
+
+
+KataGo RAG implementation:
+add to database: vector embeddings 
+FIRST THINGS TO LOSE:
+- value / policy lineup but high entropy
+- value confidence / policy inconfidence
+Potential entropy mid-late scaling factor:
+e^entropy / # legal moves available
+SHOULD KEEP:
+- value / policy both unconfident 
+-> High entropy on both
+------------------------------------------------------------------------
+
+note: does katago MCTS search as BFS or DFS?

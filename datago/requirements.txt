@@ -1,0 +1,12 @@
+# datago baseline dependencies
+# Use Python 3.12+ virtual environment (see workspace README)
+numpy
+pandas
+tqdm
+pyyaml
+rich
+
+# Optional / backend choices for ANN indexes
+# Prefer faiss-cpu when available, fall back to hnswlib
+faiss-cpu
+hnswlib

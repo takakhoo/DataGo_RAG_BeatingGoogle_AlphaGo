@@ -1,0 +1,44 @@
+{
+  "game_id": "game_20250112_001",
+  "settings": {
+    "komi": 7.5,
+    "rules": "chinese",
+    "board_size": 19,
+    "uncertainty_threshold": 0.75,
+    "w1_policy_entropy": 0.6,
+    "w2_value_variance": 0.4
+  },
+  "flagged_positions": [
+    {
+      "move_number": 45,
+      "sym_hash": "a3f8d9e2b1c4...",
+      "state_hash": "f9a2e3d1c8b7...",
+      "player_to_move": "B",
+      "moves_history": [
+        ["B", "Q4"],
+        ["W", "D4"],
+        ["B", "Q16"],
+        ...
+      ],
+      "stone_count": {
+        "black": 23,
+        "white": 22,
+        "total": 45
+      },
+      "uncertainty_metrics": {
+        "policy_entropy": 2.34,
+        "value_variance": 0.87,
+        "combined_score": 0.82
+      }
+    },
+    {
+      "move_number": 89,
+      ...
+    }
+  ],
+  "summary": {
+    "total_moves": 250,
+    "flagged_count": 12,
+    "flagging_rate": 0.048
+  }
+}

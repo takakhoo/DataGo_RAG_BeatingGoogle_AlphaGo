@@ -1,0 +1,85 @@
+'sym hash': self.state_hash,
+            'sym_hash': self.sym_hash,
+            'policy': self.policy,
+            'ownership': self.ownership,
+            'winrate': self.winrate,
+            'score_lead': self.score_lead,
+            'move_infos': self.move_infos,
+            'komi': self.komi,
+            'query_id': self.query_id
+            'stone_count': self.stone_count #the stone count from the stone count function
+            'child nodes': self.child_nodes #this would be a collection (hashmap of direct
+            child node explored by MCTS:
+            value, policy value for that index child)
+
+search_stats.h
+
+// Per-move RAG data - ONLY for flagged complex positions
+struct PerMoveRAGData {
+    int move_number;
+    std::string sym_hash;
+    std::string state_hash;
+    std::string player_to_move;
+    
+    // Children info
+    std::vector<ChildNodeInfo> children;
+    
+    // Uncertainty metrics (that triggered flagging)
+    double policy_entropy;
+    double value_variance;
+    double combined_score;
+    
+    // Stone counts
+    int black_stones;
+    int white_stones;
+};
+
+struct ChildNodeInfo {
+    std::string move;
+    std::string child_sym_hash;
+    double value;
+    double pUCT;
+    double prior;
+    int visits;
+};
+
+// Collected for entire game
+struct GameRAGData {
+    std::string game_id;
+    std::vector<std::pair<std::string, std::string>> moves_history;  // Full move list
+    
+    // ONLY flagged positions (sparse!)
+    std::vector<PerMoveRAGData> flagged_positions;
+};
+
+thread_local GameRAGData currentGameRAGData;
+
+
+
+Play.cpp
+
+
+Usage in play.cpp:
+// After each move search completes
+double E = calculatePolicyEntropy(...);
+double K = calculateValueVariance(...);
+double phase = calculatePhaseWeight(...);
+double combined = (W1 * E + W2 * K) * phase;
+
+// ONLY create PerMoveRAGData if complex
+if (combined > UNCERTAINTY_THRESHOLD) {
+    PerMoveRAGData moveData;
+    moveData.move_number = moveNum;
+    moveData.sym_hash = getSymHash(...);
+    moveData.state_hash = getStateHash(...);
+    moveData.children = extractChildren(toMoveBot->rootNode);
+    moveData.policy_entropy = E;
+    moveData.value_variance = K;
+    moveData.combined_score = combined;
+    // ... other fields
+    
+    currentGameRAGData.flagged_positions.push_back(moveData);  // Add only if flagged
+}
+
+
+I'm currently running "PerMoveRAGData()

@@ -1,0 +1,129 @@
+#context: We are using a TRAINED katago model.
+The only thing we are training is the RAG parameters. ~~> Question: Will training by including 
+RAG + MCTS deep search during self play be fast enough? Or if we augmented the RAG offline, 
+
+# storing to RAG
+{'sym hash': self.state_hash,
+            'sym_hash': self.sym_hash,
+            'player to move': self.player_to_move,
+            'symmetry_index': self.sym_index,
+            'winrate': self.winrate,
+            'score_lead': self.score_lead
+            'move_number': move number,
+            'komi': self.komi,
+            'query_id': self.query_id
+            'stone_count': self.stone_count #the stone count from the stone count function
+             "best move:" {sym index, sym_hash, move},
+             'policy': self.policy,
+            'ownership': self.ownership,
+            'move_history': {list of history of moves},
+            'child nodes': {self.child_nodes #this would be a collection / hashmap of direct
+            child node explored by MCTS:
+            move: (value, policy value assigned to this index of child)}
+}
+
+RAG - complex position deep search storage results
+  { 
+           'sym_hash': self.sym_hash,
+            'state_hash': self.state_hash,
+            'player to move': self.player_to_move,
+            'symmetry_index': self.sym_index,
+            'winrate': self.winrate,
+            'score_lead': self.score_lead
+            'move_number': move number,
+            'komi': self.komi,
+            'query_id': self.query_id
+            'stone_count': self.stone_count #the stone count from the stone count function
+             "best move:" {sym index, sym_hash, move},
+             'policy': self.policy,
+            'ownership': self.ownership,
+            'child nodes': {self.child_nodes #this would be a collection / hashmap of direct
+            child node explored by MCTS:
+            move: (value, policy value assigned to this index of child)}
+}
+
+2. For positions we have high uncertainty about, due to either A: lack of sufficient training data
+on that game state, or B: many good options so high difficulty in distinguishing the true "best" winning move,
+we would like to store these. The RAG will compute high uncertainty based on a function of two weights 
+(which we know are for certain indicators of uncertainty, and do not risk overfitting): 1. High policy cross-entropy, defined as E. 
+2. High value distribution - when katago calculates the value estimates for each position and updates them after 
+backpropogation, after finishing the MCTS search, stores all the updated values for every searched game state.
+These values are summed and compared, and function K of value / total measures distribution. Values with sparse distribution
+are assigned a high value for K.
+
+3. weights are assigned to E and K, and a total function (w1*E + w2*K)*phase <where phase is a function of how many pieces are left on the board to determine sparseness 
+to correlate to late / early game> is learned via play against the baseline
+katago to determine the best thresholds for these parameters. This cutoff will then be used to determine the storage threshold for what 
+game states go into the RAG and what doesn't go into the RAG, as well as when to look at the RAG.
+
+#playing with RAG - retrieving & updating the RAG in real-time
+4. The game will then start. When the model runs into a complex game state in MCTS search (any node) with high uncertainty, the model
+will do a 1-Nearest Neighbors search through the RAG database first to see if the complex position has already been stored in the RAG.
+However, to ensure forever recursion doesn't occur, forcing MCTS over and over, only allow a complex-node depth of N (hand-tuned parameter / 2nd stage tuning / 
+based on our real-world limitations).
+However, let's assume at first the position wasn't found (i.e., positions  that showed up in the original MCTS tree). 
+We will do a deep level MCTS search (that looks for convergence) to more accurately determine value and policy than the baseline model. The theory for this is that
+a deeper level MCTS will always yield better results than a shallow MCTS search. IF the deeper level does not converge after N tree depth, it will stop searching.
+It will store these updated results in the form of storing a dict:
+{Game Hash: 
+ (2 best moves based on value from here, the actual policy function at this snapshot of the game state, the actual value function at this snapshot of the game,
+the policy distribution + the list of child nodes that the policy is assigned to, and the info we pulled in step 1.) }
+
+When the model runs into this exact same complex position again, when it does the ANN, it will find this position amongst the RAG database.
+To compare value similarity and policy similarity, we first compare how many child node hashes overlap.
+Then for each game state node comparison, we calculate the overlap between the children; for each overlapping child,
+we compare its policy function (val of a vector) and value (val) at that child's assigned vector dimensional position (to clarify:
+since the policy vector matches with the list of children in its feasible reach, so the policy means nothing unless its assigned to the same child).
+
+
+5. Upon finding this position, it will do a relevancy comparison (threshold 90% - hand tune after fixing the weights) by comparing 
+the other features of the vector with the current complex state vector. The comparison weights of the various features will also be learned.
+If relevance is high, directly blend that stored policy and value function into the current. Otherwise,
+if the relevance is not high, force the best children moves stored in the RAG to be pathways to explore in MCTS; 
+either add them at the end of the RAG as a separate MCTS search, or depending on how BFS/DFS dynamic works with MCTS, force them as 
+first search.
+
+6. The RAG will populated in ONE WAY: online (in game) // offline implementation is in rag_store/game_analyzer, but method is OBSELETE.
+For offline, the process is as follows:
+Self-play (fast, 800 visits):
+    -Collect all MCTS tree data : child node hashes, values, policies
+    -Calculate E (policy entropy) and K (value variance) per position
+    -Flag positions where (w1*E + w2*K) * phase > threshold
+        -Run deep MCTS (10,000+ visits) on each complex position
+        -Get refined: winrate, entropy, score_lead, ownership, moveInfos
+    -Write to JSON after each game
+Training games against baseline:
+    -Query RAG by sym_hash
+    -If found with high relevance (>90%): Blend stored policy/value into MCTS
+    -If NOT found or low relevance: Force best 2 moves from closest RAG entry as exploration priority (NO deep search mid-game)
+Parameter iteration:
+    -Play games, measure win rate
+    -Adjust w1/w2/phase/relevancy_weights
+    -Re-filter same positions with new parameters (no re-analysis!)
+    -Repeat until optimal
+
+{
+  "sym_hash": "lookup_key",
+  "state_hash": "unique_id",
+  "policy": [362 floats],
+  "ownership": [361 floats],
+  "winrate": 0.547,
+  "score_lead": 2.3,
+  "move_infos": [...],
+  "komi": 7.5,
+  "query_id": "query_123",
+  "best child": {hash, move},
+  "child_nodes": [
+    {"hash": "child1", "value": 0.52, "pUCT": 1.23},
+    ...
+  ]
+}
+
+
+
+
+
+
+
+
+
