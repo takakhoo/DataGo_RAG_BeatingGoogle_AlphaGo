@@ -1,22 +1,22 @@
 # DataGo: Retrieval-Augmented Recursive Search that Surpasses KataGo
 
-**ENGS 102 - Game Theoretic Design | Dartmouth College Thayer School of Engineering**  
-**Team:** Benjamin Huh, Jason Peng, Taka Khoo, Olir Eswaramoorthy, David Roos, Victor Lun Pun  
-**Advisor:** Dr. Peter Chin
+**Team:** Benjamin Huh, Jason Peng, Taka Khoo, Olir Eswaramoorthy, David Roos, Victor Lun Pun
+
+**Note:** This project is actively in development. Current results demonstrate promising improvements over KataGo, but the architecture continues to be refined and expanded.
 
 ---
 
-## 📄 Complete Research Documents
+## Complete Research Documents
 
-**📑 [View Full Research Paper (PDF)](DATAGO_PAPER.pdf)**  
-**📊 [View Presentation Slides (PDF)](DataGo_Presentation.pdf)**  
-**📋 [View Original Project Plan (PDF)](Project_Plan.pdf)**
+**[View Full Research Paper (PDF)](DATAGO_PAPER.pdf)**  
+**[View Presentation Slides (PDF)](DataGo_Presentation.pdf)**  
+**[View Original Project Plan (PDF)](Project_Plan.pdf)**
 
 The complete research paper provides comprehensive mathematical foundations, experimental methodology, and detailed analysis. The presentation offers a visual walkthrough of the architecture and results. The project plan outlines the original vision and roadmap.
 
 ---
 
-## 🎯 Executive Summary: We Already Beat KataGo
+## Executive Summary: We Already Beat KataGo
 
 **DataGo has achieved measurable superiority over KataGo with minimal tuning:**
 
@@ -160,7 +160,7 @@ Positions with concentrated search have $E(s)\approx 0$, while positions with ma
 From the shallow search, we consider the top-$k$ children (typically $k\le 10$) by visit count, with values $\{Q_1,\dots,Q_k\}$. We define normalized variance:
 
 $$
-K(s) = \min\bigl(1,\;\operatorname{Var}(Q_1,\dots,Q_k) / 0.25\bigr)
+K(s) = \min\left(1,\;\frac{\text{Var}(Q_1,\dots,Q_k)}{0.25}\right)
 $$
 
 Large $K(s)$ indicates that plausible moves lead to significantly different outcomes, signaling internal disagreement.
@@ -205,13 +205,13 @@ This guarantees that symmetric positions share the same key $h(s)$.
 For each canonical position $\tilde{s}$, the memory stores a list of deep-search contexts:
 
 $$
-\mathrm{Ctx}(\tilde{s}) = \bigl\{c_1,\dots,c_m\bigr\}
+\mathrm{Ctx}(\tilde{s}) = \{c_1,\dots,c_m\}
 $$
 
 Each context $c_i$ contains:
 
 $$
-c_i = \bigl(a_i^{\star}, \mathcal{U}_i, V_{\text{deep},i}, \pi_{\text{deep},i}, \Delta\text{score}_i, n_i, d_i, t_i\bigr)
+c_i = (a_i^{\star}, \mathcal{U}_i, V_{\text{deep},i}, \pi_{\text{deep},i}, \Delta\text{score}_i, n_i, d_i, t_i)
 $$
 
 where $a_i^{\star}$ is the recommended move, $V_{\text{deep},i}$ and $\pi_{\text{deep},i}$ are the deep-search value and policy, $\Delta\text{score}_i$ is the score lead, $n_i$ is the stone count, $d_i$ is the recursion depth, and $t_i$ is a timestamp.
@@ -404,8 +404,8 @@ Raising $D$ from 1,000 to 10,000 reduces policy error by nearly **3×** but mult
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/takakhoo/DataGo_RAGtoWin_vs_Google.git
-cd DataGo_RAGtoWin_vs_Google
+git clone https://github.com/takakhoo/DataGo_RAG_BeatingGoogle_AlphaGo.git
+cd DataGo_RAG_BeatingGoogle_AlphaGo
 ```
 
 ### Step 2: Install Python Dependencies
@@ -464,21 +464,21 @@ python run_datago_recursive_match.py \
 
 ## Future Work: 8-Phase Tuning Roadmap
 
-**Current Status:** We have achieved 80% win rate against KataGo with minimal tuning (Phase 1 complete). The architecture will continue to be built and refined until NeurIPS or ICLR submission.
+**Current Status:** We have achieved 80% win rate against KataGo with minimal tuning (Phase 1 complete). **This project is actively in development** and the architecture will continue to be built and refined until NeurIPS or ICLR submission.
 
-### Phase 1: ✅ Uncertainty Gate Calibration (COMPLETE)
+### Phase 1: Uncertainty Gate Calibration (COMPLETE)
 
 - Tuned uncertainty threshold on synthetic data: $\theta = 0.37$
 - Retuned on real KataGo outputs: $\theta = 0.15$
 - **Result:** 8-0-2 record (80% win rate)
 
-### Phase 2: ✅ Deep Search Configuration (COMPLETE)
+### Phase 2: Deep Search Configuration (COMPLETE)
 
 - Swept deep visit budgets: $D \in \{1{,}000, 2{,}000, 5{,}000, 10{,}000\}$
 - Evaluated recursion depths: $D_{\max} \in \{1, 2, 3, 5\}$
 - **Result:** Optimal config: $D=10{,}000$, $D_{\max}=3$ (for stress testing)
 
-### Phase 3: 🔄 Policy Blending Implementation (IN PROGRESS)
+### Phase 3: Policy Blending Implementation (IN PROGRESS)
 
 **Goal:** Implement full policy blending in MCTS
 
@@ -490,7 +490,7 @@ $$
 
 **Expected Impact:** Further shift in Nash equilibrium, potentially increasing win rate to 85-90%.
 
-### Phase 4: 📋 Pro-Game Ingestion
+### Phase 4: Pro-Game Ingestion
 
 **Goal:** Pre-seed ANN with thousands of professional game positions
 
@@ -500,7 +500,7 @@ $$
 
 **Expected Impact:** Cross-game generalization, improved opening play, higher cache efficiency.
 
-### Phase 5: 📊 Asymmetric Visit Testing
+### Phase 5: Asymmetric Visit Testing
 
 **Goal:** Test whether RAG compensates for reduced base visits
 
@@ -511,7 +511,7 @@ $$
 
 **Expected Impact:** Prove that RAG provides value beyond simple visit scaling.
 
-### Phase 6: 🎯 Threshold Sweep and Optimization
+### Phase 6: Threshold Sweep and Optimization
 
 **Goal:** Map threshold space to performance surface
 
@@ -523,7 +523,7 @@ $$
 
 **Expected Impact:** Find optimal operating point balancing win rate, activation, and compute.
 
-### Phase 7: 🔬 Advanced Relevance Scoring
+### Phase 7: Advanced Relevance Scoring
 
 **Goal:** Improve relevance metric with learned weights
 
@@ -533,7 +533,7 @@ $$
 
 **Expected Impact:** Higher precision in memory retrieval, better cache utilization.
 
-### Phase 8: 🏆 AlphaGo-Level Competition
+### Phase 8: AlphaGo-Level Competition
 
 **Goal:** Target submission to NeurIPS or ICLR
 
@@ -586,7 +586,7 @@ DataGo_RAGtoWin_vs_Google/
 
 ## Key Achievements
 
-### ✅ Validated Accomplishments
+### Validated Accomplishments
 
 1. **Beat KataGo:** 9-0-1 (synthetic) and 8-0-2 (real tuned) records
 2. **Efficient Activation:** Only 5.1% activation rate needed for 80% win rate
@@ -594,14 +594,14 @@ DataGo_RAGtoWin_vs_Google/
 4. **Recursive Deep Search:** 95.7% recursion rate, building deep analysis trees
 5. **Reproducible Pipeline:** All experiments logged and reproducible
 
-### 🎯 What Makes This Impressive
+### What Makes This Impressive
 
 - **No new network training**—using only public KataGo networks
 - **Minimal tuning**—just one threshold adjustment
 - **Simple implementation**—forced exploration, not even full blending
 - **Self-play memory**—no external pro-game data yet
 
-### 🚀 Future Potential
+### Future Potential
 
 With 8-phase tuning complete, we expect:
 - **>90% win rate** against KataGo
@@ -684,7 +684,7 @@ If you use this work in your research, please cite:
   author={Huh, Benjamin and Peng, Jason and Khoo, Taka and Eswaramoorthy, Olir and Roos, David and Pun, Victor Lun},
   journal={arXiv preprint},
   year={2025},
-  note={ENGS 102, Dartmouth College}
+  note={Dartmouth College}
 }
 ```
 
@@ -692,7 +692,6 @@ If you use this work in your research, please cite:
 
 ## Acknowledgments
 
-- **Advisor:** Dr. Peter Chin, Thayer School of Engineering, Dartmouth College
 - **KataGo Team:** For providing excellent open-source Go engine and networks
 - **Dartmouth LISP Lab:** For computational resources
 
@@ -711,4 +710,4 @@ For questions, issues, or collaborations, please open an issue on GitHub or cont
 ---
 
 **Last Updated:** November 2025  
-**Status:** Active development targeting NeurIPS/ICLR submission
+**Status:** Active development in progress. Architecture continues to be refined and expanded, targeting NeurIPS or ICLR submission.
