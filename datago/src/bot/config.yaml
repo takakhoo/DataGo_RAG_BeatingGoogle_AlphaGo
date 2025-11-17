@@ -1,0 +1,481 @@
+# DataGo Bot Configuration
+# This configuration file contains all tunable parameters for the RAG-enhanced Go bot
+# Parameters are organized by tuning phase as described in parameter_tuning_plan.txt
+
+# ============================================================================
+# PHASE 1A: UNCERTAINTY DETECTION PARAMETERS
+# ============================================================================
+# These parameters jointly define what constitutes an "uncertain" position
+# worthy of storage/retrieval in the RAG database.
+
+uncertainty_detection:
+  # Weight for policy cross-entropy (E)
+  # Range: [0.0, 1.0], must sum with w2 to 1.0
+  # Tuned in Phase 1a
+  w1: 0.5
+  
+  # Weight for value distribution sparseness (K)
+  # Range: [0.0, 1.0], must sum with w1 to 1.0
+  # Tuned in Phase 1a
+  w2: 0.5
+  
+  # Type of phase function to adjust uncertainty by game phase
+  # Options: "linear", "exponential", "piecewise"
+  # Tuned in Phase 1a
+  phase_function_type: "linear"
+  
+  # Coefficients for the phase function based on stones_on_board
+  # For linear: [a, b] gives phase(s) = a*(s/361) + b
+  # For exponential: [a, b, c] gives phase(s) = a*exp(b*s/361) + c
+  # For piecewise: [early_mult, mid_mult, late_mult] for s<120, 120<=s<240, s>=240
+  # Tuned in Phase 1a
+  phase_function_coefficients: [0.5, 0.75]  # Default: increases from early to late game
+  
+  # Combined uncertainty formula: (w1*E + w2*K) * phase(stones_on_board)
+
+# ============================================================================
+# PHASE 1B: RELEVANCE COMPARISON WEIGHTS
+# ============================================================================
+# These weights determine similarity between query position and RAG entries
+# All weights must sum to 1.0
+
+relevance_weights:
+  # IMPORTANT: These weights are used ONLY after sym_hash exact match is found
+  # ANN uses sym_hash only → finds identical board positions
+  # Then compute similarity score using weighted combination of these features:
+  
+  # Weight for policy distribution similarity
+  # Most important for determining exploration patterns
+  # Tuned in Phase 1b
+  policy_weight: 0.40
+  
+  # Weight for winrate similarity
+  # High priority - primary utility component
+  # Tuned in Phase 1b
+  winrate_weight: 0.25
+  
+  # Weight for score lead similarity
+  # Moderate priority - secondary utility
+  # Tuned in Phase 1b
+  score_lead_weight: 0.10
+  
+  # Weight for visit/child node distribution overlap
+  # Shows what MCTS actually preferred
+  # Tuned in Phase 1b
+  visit_distribution_weight: 0.15
+  
+  # Weight for game phase matching (stone count)
+  # Ensures phase context alignment
+  # Tuned in Phase 1b
+  stone_count_weight: 0.05
+  
+  # Weight for komi matching
+  # Binary match requirement
+  # Tuned in Phase 1b
+  komi_weight: 0.05
+  
+  # Similarity computation formula (after sym_hash match):
+  # similarity = policy_weight * policy_sim(stored, current) +
+  #              winrate_weight * winrate_sim(stored, current) +
+  #              score_lead_weight * score_lead_sim(stored, current) +
+  #              visit_distribution_weight * visit_dist_sim(stored, current) +
+  #              stone_count_weight * stone_count_sim(stored, current) +
+  #              komi_weight * komi_match(stored, current)
+  
+  # Relevance threshold for high-confidence RAG retrieval
+  # STRATEGY: After sym_hash match, if similarity >= threshold: Use precomputed optimal move
+  # If similarity < threshold: Force explore optimal move as first priority
+  # Range: [0.0, 1.0], typically 0.85-0.95
+  relevance_threshold: 0.95
+  
+  # Similarity function definitions (applied AFTER sym_hash exact match)
+  similarity_functions:
+    # Policy distribution similarity: cosine similarity between policy vectors
+    policy_similarity:
+      method: "cosine"  # cosine, euclidean, or kl_divergence
+      normalize: true
+    
+    # Winrate similarity: absolute difference normalized to [0, 1]
+    winrate_similarity:
+      method: "inverse_absolute_diff"  # 1 - |stored - current|
+      max_diff: 1.0
+    
+    # Score lead similarity: absolute difference with tolerance
+    score_lead_similarity:
+      method: "inverse_absolute_diff"  # 1 - min(|stored - current| / max_diff, 1.0)
+      max_diff: 20.0  # Score differences up to 20 points
+    
+    # Visit distribution similarity: Jaccard or cosine on visit counts
+    visit_distribution_similarity:
+      method: "cosine"  # Compare which moves were explored
+      normalize: true
+    
+    # Stone count similarity: inverse absolute difference
+    stone_count_similarity:
+      method: "inverse_absolute_diff"
+      max_diff: 50  # Up to 50 stones difference
+    
+    # Komi matching: exact match (binary)
+    komi_similarity:
+      method: "exact_match"  # 1.0 if equal, 0.0 if different
+      tolerance: 0.01  # Allow tiny floating point differences
+
+# ============================================================================
+# PHASE 1C: UNCERTAINTY THRESHOLD
+# ============================================================================
+# Determines when to query the RAG database during gameplay
+
+rag_strategy:
+  # RAG retrieval and usage strategy
+  # ALGORITHM:
+  # 1. ANN lookup: Use cosine similarity to find 1-nearest neighbor based on sym_hash
+  #    - Retrieves the closest sym_hash in the database
+  #    - Does NOT guarantee exact match, just closest match
+  # 2. Check if retrieved sym_hash is IDENTICAL to query sym_hash:
+  #    a. If NOT identical (different board position):
+  #       → Add RAG's best move as first priority for tree search
+  #    b. If IDENTICAL (exact same board position):
+  #       → Compute similarity score using relevance_weights on other parameters
+  #          (policy, winrate, score_lead, visit_distribution, stone_count, komi)
+  #       → If similarity >= relevance_threshold (0.95): Use precomputed optimal move directly
+  #       → If similarity < relevance_threshold: Add optimal move as first priority for tree search
+  use_1nn_exact_matching: true
+  
+  # ANN index key: sym_hash with cosine similarity
+  ann_index_key: "sym_hash"
+  ann_distance_metric: "cosine"
+  
+  # After ANN retrieval, check for exact identity before computing similarity
+  check_exact_sym_hash_match: true
+  
+  # After finding exact sym_hash match, compute similarity using these features:
+  # - policy distribution similarity
+  # - winrate similarity  
+  # - score_lead similarity
+  # - visit_distribution similarity
+  # - stone_count (game phase) similarity
+  # - komi matching
+  # Weights defined in relevance_weights section below
+
+rag_query:
+  # Storage/query threshold for uncertain positions
+  # Positions with uncertainty > threshold will trigger RAG lookup
+  # Tuned in Phase 1c using percentile-based approach
+  # This will map to top X% of uncertain positions (e.g., 0.15 = top 15%)
+  # NOTE: With REAL NN outputs (not synthetic), uncertainty is much lower!
+  # Real NN uncertainty range: 0.05-0.21 (vs synthetic: 0.35-0.40)
+  # Set to 0.150 to capture top ~5-10% of positions with real NN data
+  uncertainty_threshold: 0.150
+  
+  # Deep search threshold offset (added to uncertainty_threshold)
+  # Controls when to trigger expensive recursive deep search
+  # Set to 0.0 to make deep search threshold same as RAG query threshold
+  # Recommended: 0.0 - 0.05
+  deep_search_offset: 0.0
+  
+  # Maximum number of RAG queries per game (to control overhead)
+  max_queries_per_game: 50
+  
+  # Maximum retrieval time per query (milliseconds)
+  # Ensures RAG doesn't slow down gameplay
+  max_query_time_ms: 5.0
+
+# ============================================================================
+# PHASE 2: DEEP MCTS SEARCH PARAMETERS
+# ============================================================================
+# Controls how deep MCTS searches when analyzing uncertain positions
+
+deep_mcts:
+  # Maximum number of visits for deep search (augmented recursive search)
+  # Standard search uses 800 visits (from katago.visits)
+  # Deep search uses MORE visits for thorough analysis of complex positions
+  # Range: [1000, 10000+]
+  # Trade-off: deeper = better quality but slower
+  # Tuned in Phase 2
+  # Recommended: 2000-5000 for balance, 10000+ for maximum quality
+  max_visits: 2000
+  
+  # Policy convergence threshold
+  # Stop early if policy changes by less than this amount
+  # Range: [0.01, 0.1]
+  # Tuned in Phase 2
+  policy_convergence_threshold: 0.05
+  
+  # Value convergence threshold
+  # Stop early if value changes by less than this amount
+  # Range: [0.01, 0.05]
+  # Tuned in Phase 2
+  value_convergence_threshold: 0.02
+  
+  # Check convergence every N visits
+  convergence_check_interval: 500
+  
+  # Minimum visits before checking convergence
+  min_visits_before_convergence: 2000
+
+# ============================================================================
+# PHASE 3: BLENDING & RECURSION PARAMETERS
+# ============================================================================
+# Controls how retrieved RAG information is integrated into MCTS
+
+blending:
+  # Blending weight for RAG prior vs network prior
+  # P_blended = (1-beta)*P_network + beta*P_RAG
+  # Range: [0.0, 1.0]
+  # Tuned in Phase 3
+  beta: 0.4
+  
+  # Reranking weights for retrieved neighbors
+  # alpha: weight for reachability (policy similarity)
+  # gamma: weight for structural boost (parent/child relationships)
+  # Tuned in Phase 3
+  reranking_alpha: 0.7
+  reranking_gamma: 0.3
+  
+  # Number of top neighbors to use for building retrieval prior
+  # STRATEGY: Use only 1 neighbor for exact matching strategy
+  top_n_neighbors: 1
+  
+  # Number of top moves to include from network policy
+  top_n_moves: 16
+
+recursion:
+  # Maximum recursion depth for complex node analysis
+  # Prevents infinite recursion during MCTS
+  # Controls how many times we can recursively query RAG for child nodes
+  # Range: [1, 5]
+  # Set to 3 for thorough search tree exploration
+  max_recursion_depth: 3
+  
+  # Force exploration of top N moves from RAG when relevance < threshold
+  # STRATEGY: Force explore only the single best move from RAG as first priority
+  force_exploration_top_n: 1
+
+# ============================================================================
+# KATAGO CONFIGURATION
+# ============================================================================
+# Settings for KataGo engine integration
+
+katago:
+  # Path to KataGo executable
+  executable_path: "/scratch2/f004ndc/AlphaGo Project/KataGo/cpp/katago"
+  
+  # Path to KataGo model file
+  model_path: "/scratch2/f004ndc/AlphaGo Project/KataGo/models/g170e-b10c128-s1141046784-d204142634.bin.gz"
+  
+  # Path to KataGo config file
+  config_path: "/scratch2/f004ndc/AlphaGo Project/KataGo/configs/gtp_800visits.cfg"
+  
+  # Number of MCTS visits for standard (shallow) search
+  # This is used during normal gameplay
+  visits: 800
+  
+  # Maximum time per move (seconds)
+  # Set to 0 for no time limit
+  max_time_per_move: 30.0
+  
+  # Board size
+  board_size: 19
+  
+  # Komi value
+  komi: 7.5
+  
+  # Analysis settings for position evaluation
+  analysis:
+    # Request ownership prediction
+    include_ownership: true
+    
+    # Request policy distribution
+    include_policy: true
+    
+    # Request move information with probabilities
+    include_move_info: true
+    
+    # Maximum number of moves to analyze
+    max_moves: 50
+
+# ============================================================================
+# RAG DATABASE CONFIGURATION
+# ============================================================================
+# Settings for the retrieval-augmented generation database
+
+rag_database:
+  # Path to RAG database JSON file
+  database_path: "./rag_store/rag_output/rag_database.json"
+  
+  # ANN index configuration
+  ann:
+    # Index type: "faiss" or "hnswlib"
+    index_type: "faiss"
+    
+    # Number of neighbors to retrieve (k-NN)
+    # STRATEGY: Use 1-NN to find closest sym_hash
+    num_neighbors: 1
+    
+    # ANN index uses sym_hash ONLY as the lookup key
+    # Uses cosine similarity to find nearest neighbor
+    # NOTE: This finds the CLOSEST match, not necessarily an exact match
+    use_sym_hash_only: true
+    
+    # Distance metric for ANN search
+    # Cosine similarity to find nearest sym_hash in embedding space
+    distance_metric: "cosine"
+    
+    # Embedding dimension (should match sym_hash size)
+    # NOTE: Since we're using sym_hash only, this is the hash dimension
+    # The full embedding (policy vector + metadata) is stored but NOT used for ANN lookup
+    embedding_dim: 64
+    
+    # FAISS-specific settings (if using FAISS)
+    faiss:
+      # Index type: "Flat" (exact), "IVF" (approximate), "HNSW" (approximate)
+      # OPTIMIZED: Flat is best for small databases - uses exact cosine similarity search
+      index_method: "Flat"
+      
+      # Use cosine similarity for distance computation
+      # This finds the nearest neighbor by cosine distance
+      use_inner_product: false  # false = cosine similarity, true = inner product
+      normalize_vectors: true   # Normalize for cosine similarity
+      
+      # Number of clusters for IVF index
+      # OPTIMIZED: Reduced from 100 to 50 for smaller database
+      nlist: 50
+      
+      # Number of clusters to probe during search
+      # OPTIMIZED: Reduced from 10 to 5 for faster search
+      nprobe: 5
+    
+    # HNSW-specific settings (if using hnswlib)
+    hnsw:
+      # Construction parameter (higher = better quality, slower build)
+      # OPTIMIZED: Reduced from 16 to 8 for faster construction/search
+      M: 8
+      
+      # Search parameter (higher = better recall, slower search)
+      # OPTIMIZED: Reduced for faster search on small database
+      ef_construction: 100
+      ef_search: 30
+  
+  # Storage management
+  storage:
+    # Maximum database size (GB)
+    # OPTIMIZED: Reduced from 0.5 to 0.1 GB for faster ANN when pruning enabled
+    max_size_gb: 0.1
+    
+    # Prune least-used entries when database is full
+    enable_pruning: true
+    
+    # Minimum query frequency to keep entry (queries per 1000 games)
+    # OPTIMIZED: Increased from 0.1 to 0.5 for more aggressive pruning
+    min_query_frequency: 0.5
+    
+    # Refresh frequently-used entries periodically
+    enable_refresh: true
+    
+    # Refresh entries accessed more than N times per 100 games
+    # OPTIMIZED: Increased from 5 to 10 to keep only highly relevant entries
+    refresh_frequency_threshold: 10
+
+# ============================================================================
+# GAME CONFIGURATION
+# ============================================================================
+# General game and bot behavior settings
+
+game:
+  # Game mode: "self_play", "vs_katago", "vs_human", "tournament"
+  mode: "vs_katago"
+  
+  # Board size
+  board_size: 19
+  
+  # Komi
+  komi: 7.5
+  
+  # Time settings (in seconds, 0 = no limit)
+  time_settings:
+    main_time: 0
+    byo_yomi_time: 30
+    byo_yomi_periods: 3
+  
+  # Resignation threshold (resign if winrate < threshold)
+  # Set to 0.0 to disable resignation
+  resignation_threshold: 0.05
+  
+  # Number of moves before resignation is allowed
+  min_moves_before_resignation: 100
+
+# ============================================================================
+# ONLINE LEARNING CONFIGURATION
+# ============================================================================
+# Settings for real-time RAG database updates during gameplay
+
+online_learning:
+  # Enable online storage of new complex positions
+  enabled: true
+  
+  # Enable background deep analysis after moves
+  enable_background_analysis: true
+  
+  # Maximum number of background analysis jobs in queue
+  max_background_jobs: 10
+  
+  # Priority threshold for background analysis
+  # Only analyze positions with uncertainty above this threshold
+  background_analysis_threshold: 0.80
+  
+  # Track query frequency for pruning decisions
+  track_query_frequency: true
+
+# ============================================================================
+# LOGGING & MONITORING
+# ============================================================================
+# Settings for debugging and performance monitoring
+
+logging:
+  # Log level: "DEBUG", "INFO", "WARNING", "ERROR"
+  level: "INFO"
+  
+  # Log file path (set to null to disable file logging)
+  log_file: "./logs/datago_bot.log"
+  
+  # Enable detailed MCTS tree logging
+  log_mcts_tree: false
+  
+  # Enable RAG query logging
+  log_rag_queries: true
+  
+  # Enable performance profiling
+  enable_profiling: false
+  
+  # Log game records in SGF format
+  save_sgf: true
+  sgf_directory: "./games/sgf/"
+  
+  # Save detailed game analysis JSON
+  save_analysis: true
+  analysis_directory: "./games/analysis/"
+
+# ============================================================================
+# EXPERIMENTAL FEATURES
+# ============================================================================
+# Experimental features that may not be fully tuned
+
+experimental:
+  # Use GPU batch processing for MCTS expansion
+  use_gpu_batch: true
+  
+  # GPU device ID (-1 for CPU)
+  gpu_device: 7
+  
+  # Batch size for GPU processing
+  gpu_batch_size: 64
+  
+  # Enable adaptive uncertainty thresholds based on game phase
+  adaptive_threshold: true
+  
+  # Enable learning from opponent moves
+  learn_from_opponent: false
+  
+  # Enable Monte Carlo Tree Search parallelization
+  parallel_mcts: false
+  num_mcts_threads: 4

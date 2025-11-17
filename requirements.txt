@@ -1,0 +1,37 @@
+# DataGo: Retrieval-Augmented Go Engine
+# Core dependencies for running DataGo experiments
+
+# Core Data Science
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Progress and Logging
+tqdm>=4.65.0
+rich>=13.0.0
+
+# Configuration
+pyyaml>=6.0
+
+# Approximate Nearest Neighbor (ANN) Libraries
+# Prefer faiss-cpu when available, fall back to hnswlib
+faiss-cpu>=1.7.4
+hnswlib>=0.7.0
+
+# System Monitoring (for tuning/phase2/monitor.py)
+psutil>=5.9.0
+
+# DataGo-specific dependencies (from datago/requirements.txt)
+# These are also included here for convenience
+# Note: Some scripts may require additional dependencies
+
+# Optional: For advanced visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Optional: For Jupyter notebooks
+jupyter>=1.0.0
+ipykernel>=6.25.0
+
+# Note: KataGo binaries must be installed separately
+# See installation instructions in README.md
+

@@ -1,0 +1,1575 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usetheme{metropolis}
+
+\usefonttheme{professionalfonts}
+
+\usepackage{amsmath,amssymb,mathtools,bm}
+
+\usepackage{booktabs,multirow}
+
+\usepackage{tikz}
+
+\usetikzlibrary{positioning,arrows.meta,shapes.misc,fit,calc}
+
+\usepackage{pgfplots}
+
+\pgfplotsset{compat=1.18}
+
+\usepackage{array}
+
+\usepackage{siunitx}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title[DataGo vs KataGo]{\Huge DataGo: Retrieval-Augmented KataGo Experiments}
+
+\subtitle{ENGS 102 -- Game Theoretic Design \\ \small Running beyond AlphaGo \& KataGo with hybrid MCTS+RAG architectures}
+
+\author{
+
+\large Benjamin Huh \quad Jason Peng \quad Taka Khoo\\[4pt]
+
+Olir Eswaramoorthy \quad David Roos \quad Victor Lun Pun
+
+}
+
+\institute{Dartmouth College | Thayer School of Engineering \quad | \quad Dr.~Peter Chin}
+
+\date{\small Fall Term 2025 \quad -- \quad Mission: Beat KataGo via selective retrieval, deep caches, and game theory}
+
+\begin{document}
+
+\begin{frame}
+
+  \titlepage
+
+\end{frame}
+
+\begin{frame}{Talk Roadmap}
+
+\small
+
+\begin{enumerate}
+
+  \item \textbf{Origins \& Motivation.} History of Go engines (AlphaGo, KataGo); why beating KataGo is still a frontier problem.
+
+  \item \textbf{Game Rules \& Game Theory Primer.} Recap of scoring, zero-sum payoff, and MCTS–policy/value interplay.
+
+  \item \textbf{Scientific Architecture.} How DataGo blends neural priors with memory (uncertainty gating, ANN, recursive deep search).
+
+  \item \textbf{Supporting Infrastructure.} Scripts, rag-store analyzers, monitors, and ingest pipelines that make experiments reproducible.
+
+  \item \textbf{Experimental Proofs.} Synthetic and real matches, threshold sweeps, activation vs win-rate plots, and logging analysis.
+
+  \item \textbf{Results, Lessons, Roadmap.} Key wins (9/10 synthetic, 8/10 real), current gaps (blending, pro seeding), and future game-theoretic experiments.
+
+\end{enumerate}
+
+\end{frame}
+
+%============================================================
+
+\section{Part 1: Go Fundamentals \& AI Landscape \\ \small "From Lee Sedol to KataGo, we set the stage: Go rules, zero-sum math, and the AI race we intend to upend."}
+
+\subsection{}
+
+\begin{frame}{Why Go Matters}
+
+\small
+
+\textbf{Historical context.}
+
+\begin{itemize}
+
+  \item Ancient board game (China, \(\approx\) 2500 BCE), long considered a grand challenge for AI due to immense search space (\(\approx 10^{170}\) states).
+
+  \item Requires strategic foresight, pattern recognition, and probabilistic reasoning—perfect testbed for game theory + machine learning.
+
+\end{itemize}
+
+\textbf{Hierarchical difficulty.}
+
+\[
+
+\text{Nim (Exactly solvable using combinatorial game theory) } \ll \text{ Chess (Requires deep search + heuristics) } \ll \text{ Go (Requires policy/value learning and massive search)}.
+
+\]
+
+\textbf{Why we care.} Beating strong Go engines (KataGo) means our retrieval-augmented policy can improve beyond state-of-the-art neural-MCTS hybrids.
+
+\end{frame}
+
+\begin{frame}{Go Rules Recap (for reference)}
+
+\small
+
+\textbf{Board and state.}
+
+\begin{itemize}
+
+  \item \(B\) is a \(19\times19\) lattice; state \(s \in \{-1,0,+1\}^{361}\).
+
+  \item Ko rule forbids recreating the previous state; we canonicalize by symmetry to reuse contexts.
+
+\end{itemize}
+
+\textbf{Scoring (Chinese rules).}
+
+\[
+
+\text{Score} = |\text{stones}_B| + |\text{territory}_B| - |\text{stones}_W| - |\text{territory}_W| + 7.5
+
+\]
+
+\textbf{Utility.}
+
+\[
+
+\max_{\pi_B} \min_{\pi_W} \mathbb{E}_{\pi_B,\pi_W}[ \text{Score}(s_T) ].
+
+\]
+
+\textbf{Network priors.} The neural policy/value guide MCTS; our retrieval augmentation injects cached contexts to improve \(\pi\) whenever entropy signals uncertainty.
+
+\end{frame}
+
+\begin{frame}{From AlphaGo to KataGo}
+
+\scriptsize
+
+\textbf{AlphaGo (DeepMind, 2016).}
+
+\begin{itemize}
+
+  \item First system to defeat world champion Lee Sedol (4-1).
+
+  \item Combined policy/value networks \(f_{\theta}(s), V_{\theta}(s)\) with 48-layer residual architecture and 40 million self-play games.
+
+\end{itemize}
+
+\textbf{AlphaGo Zero (2017).}
+
+\begin{itemize}
+
+  \item Removed human data; relied entirely on self-play + MCTS (\(\approx\) 100k positions/sec on TPU pods).
+
+  \item Showed that raw reinforcement learning can converge to superhuman play without handcrafted features.
+
+\end{itemize}
+
+\textbf{KataGo (open-source, 2019+).}
+
+\begin{itemize}
+
+  \item Continuous training via distributed self-play; adds features like ownership predictions, score, and advanced time settings.
+
+  \item Serves as modern baseline—fast, efficient, and widely trusted for analysis.
+
+\end{itemize}
+
+\textbf{Why beating KataGo matters.} If we outperform KataGo, we improve on a state-of-the-art open engine aligned with ongoing research (FAISS, retrieval, graph search).
+
+\end{frame}
+
+\begin{frame}{Game Theory \& Zero-Sum Framing}
+
+\small
+
+\textbf{Zero-sum expectation.}
+
+\[
+
+\max_{\pi_B} \min_{\pi_W} \mathbb{E}_{\pi_B,\pi_W}[\text{Score}(s_T)].
+
+\]
+
+\begin{itemize}
+
+  \item Each strategy \(\pi\) maps states to distributions over legal moves.
+
+  \item AlphaGo/KataGo approximate equilibria via policy networks + MCTS.
+
+\end{itemize}
+
+\textbf{Data pipeline.}
+
+\[
+
+\text{State } s \xrightarrow{f_{\theta}} \pi_{\theta}, V_{\theta} \xrightarrow{\text{MCTS}} \pi_{\text{MCTS}}(s).
+
+\]
+
+\[
+
+\text{Score } = |\text{stones}_B|+|\text{territory}_B| - |\text{stones}_W| - |\text{territory}_W| + k,\quad k=7.5.
+
+\]
+
+\textbf{Our twist.} Retrieval-augmented GO (DataGo) wants to refine \(\pi_{\theta}\) when uncertainty is high, injecting proven contexts from past deep analyses to alter the payoff matrix.
+
+\end{frame}
+
+\begin{frame}{Project Vision}
+
+\small
+
+\textbf{Goal.} Blend the strengths of neural priors (fast, superhuman) with explicit memories (deep cached analyses) to beat KataGo.
+
+\textbf{Key claims we will demonstrate:}
+
+\begin{enumerate}
+
+  \item Retrieval-augmented gating increases win rate without exploding compute.
+
+  \item Recursive deep search + caches produces "instant 10k-visit priors" on repeat positions.
+
+  \item Our system achieved $9/10$ wins in synthetic stress tests and $8/10$ wins vs real KataGo with tuned thresholds.
+
+\end{enumerate}
+
+\textbf{Roadmap.}
+
+\begin{itemize}
+
+  \item Start with baseline Go rules and game theory.
+
+  \item Walk through the evolution from AlphaGo to KataGo to DataGo.
+
+  \item Show experimental proof that our retrieval pipeline adds measurable value.
+
+\end{itemize}
+
+\end{frame}
+
+%============================================================
+
+\section{Part 2: Repository Ecosystem \\ \small "KataGo binaries, DataGo's RAG brain, and RagFlow ingestion form one tightly coupled lab for experiments."}
+
+\begin{frame}{Project Layout (text summary)}
+
+\scriptsize
+
+\textbf{Root: \code{/alphago\_project}}
+
+\begin{itemize}
+
+  \item \textbf{\code{katago\_repo}}: upstream KataGo source plus GPU/CPU builds (\code{cpp/build-opencl}, \code{cpp/build-eigen}). Holds configs (\code{run/default\_gtp.cfg}, \code{analysis.cfg}), tuned kernels, and logs. Provides the baseline policy/value function \(f_{\theta}(s)\) and the standard MCTS implementation.
+
+  \item \textbf{\code{datago}}: RAG research sandbox. Contains custom bot (\code{src/bot/datago\_bot.py}), ANN memory (\code{src/memory}), recursive match runner (\code{run\_datago\_recursive\_match.py}), rag store analyzer, tuning monitors, and experiment documentation. Implements the RAG policy
+
+  \[
+
+  \pi_{\text{RAG}}(s) = (1-\beta)\,\pi_{\text{katago}}(s) + \beta\,\pi_{\text{memory}}(s),
+
+  \]
+
+  where \(\pi_{\text{memory}}\) comes from ANN retrieval + deep search contexts.
+
+  \item \textbf{\code{ragflow\_repo}}: production ingestion stack (FastAPI backend, DeepDoc parsing, GraphRAG, agentic tools, web UI). Used to curate external corpora (e.g., pro games, commentary) and pre-seed the ANN with high-value contexts, feeding \(\pi_{\text{memory}}\).
+
+  \item \textbf{\code{venv}}: shared Python environment used by all scripts (rag store, monitor, match runners) to ensure consistent dependencies.
+
+\end{itemize}
+
+\textbf{Interaction.} Matches run entirely inside \code{datago}, but rely on binaries/configs from \code{katago\_repo}. Future ingestion pipelines from \code{ragflow\_repo} augment the ANN before games, improving retrieval quality.
+
+\end{frame}
+
+\begin{frame}{Baseline Engine (\texttt{katago\_repo})}
+
+\small
+
+\textbf{Model.} Neuronal policy/value function \(f_{\theta}(s)\) trained on self-play; default visits \(=800\) per move.  
+
+\textbf{MCTS.} Standard PUCT search:
+
+\[
+
+a^\star = \arg\max_a \left( Q(s,a) + c_{\text{puct}}\,P_{\theta}(s,a)\frac{\sqrt{N(s)}}{1+N(s,a)} \right).
+
+\]
+
+\textbf{Win rate (baseline).}
+
+\[
+
+p_{\text{win}}^{\text{KataGo}}(800\text{v}\ \text{vs}\ 800\text{v}) \approx 0.50.
+
+\]
+
+\textbf{Role for DataGo.}
+
+\begin{itemize}
+
+  \item Provides the initial policy \(\pi_{\text{KataGo}}\) and value \(V_{\theta}(s)\).
+
+  \item Supplies \texttt{kata-set-param} to raise the visit count dynamically when we launch deep or recursive searches.
+
+  \item Acts as the "oracle" against which we measure improvements (e.g., 9/10 synthetic wins, 8/10 real wins).
+
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{RAG-Enhanced Engine (\texttt{datago})}
+
+\small
+
+\textbf{Policy blending (future).}
+
+\[
+
+\boxed{\pi_{\text{RAG}}(s) = (1-\beta)\,\pi_{\text{KataGo}}(s) + \beta\,\pi_{\text{memory}}(s)},\quad \beta=0.4 \text{ (planned).}
+
+\]
+
+\textbf{Uncertainty gating.}
+
+\[
+
+\mathcal{U}(s) = (w_1E + w_2K)\,\phi(\text{stones}),\quad
+
+\theta \in \{0.37,\ 0.15\}.
+
+\]
+
+\textbf{Deep recursive search.}
+
+\[
+
+\text{Visits}(d) = V_{\text{deep}} \sum_{i=0}^d \prod_{j=0}^{i-1} b_j,\quad V_{\text{deep}} \in \{2000,\ 10000\}.
+
+\]
+
+\textbf{Results.}
+
+\begin{itemize}
+
+  \item Synthetic: \(p_{\text{win}}=0.9\) with 63\% activation (baseline stress test).
+
+  \item Real tuned (\(\theta=0.15\)): \(p_{\text{win}}=0.8\) with 5\% activation, 6.6 hits/query—proof RAG adds value even before blending.
+
+  \item Real untuned: \(p_{\text{win}}=0\) (no gating); demonstrates necessity of real-data calibration.
+
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{Pro Seeding \& Ingestion (\texttt{ragflow\_repo})}
+
+\small
+
+\textbf{Goal.} Raise cross-game retrieval quality by ingesting external corpora:
+
+\[
+
+\text{Rel}(s) = \sum_i \alpha_i f_i(x_s, x_{\text{memory}}).
+
+\]
+
+\textbf{Mechanism.}
+
+\begin{itemize}
+
+  \item Parse SGFs, commentary, tactical analyses; transform them into ANN embeddings.
+
+  \item Index them via FAISS/HNSW so DataGo can retrieve pro-grade priors mid-game.
+
+  \item Expectation: \(\mathbb{E}[p_{\text{hit}}] \uparrow\) once thousands of curated contexts are available.
+
+\end{itemize}
+
+\textbf{Downstream impact.}
+
+\[
+
+\pi_{\text{memory}}(s) = \text{retrieve}(\text{ANN},\,\text{sym-hash}(s)) \;\Rightarrow\; \text{cached policy/value used in RAG search.
+
+\]
+
+\textbf{Next step.} Integrate ragflow ingestion before long matches so that DataGo's memory spans not only prior self-play but also curated pro-game knowledge.
+
+\end{frame}
+
+\begin{frame}{Shared Infrastructure (\texttt{venv})}
+
+\small
+
+\textbf{Purpose.} Keep math/data scripts reproducible:
+
+\[
+
+\text{Dependencies} = \{\text{FAISS}, \text{PyTorch}, \text{psutil}, \text{monitoring}\}.
+
+\]
+
+\textbf{Why it matters.}
+
+\begin{itemize}
+
+  \item Neural evaluations, ANN retrievals, recursive runners, rag store analyzers all use exactly the same versions of FAISS, PyTorch, etc.
+
+  \item Ensures that metrics (e.g., hit ratios, activation rates) are consistent across runs and teammates.
+
+\end{itemize}
+
+\textbf{Scientific Outcome.} Enables deterministic experiments where tuning \(\theta\), \(V_{\text{deep}}\), or ANN parameters reflects real algorithmic shifts—not environment drift.
+
+\end{frame}
+
+%============================================================
+
+\section{Part 3: Math Foundation \\ \small "Uncertainty gating, relevance scoring, and recursive deep-search equations define when memory intervenes."}
+
+\begin{frame}{Uncertainty Metric (1/2)}
+
+\small
+
+\[
+
+\mathcal{U}(s) = (w_1 E + w_2 K)\cdot \phi(\text{stones}).
+
+\]
+
+\textbf{Entropy \(E\).}
+
+\[
+
+E = -\frac{1}{\log|L|} \sum_{a \in L} \pi_{\text{net}}(a) \log \pi_{\text{net}}(a).
+
+\]
+
+A uniform policy yields \(E\approx 1\), while a sharp policy yields \(E\approx 0\).
+
+\textbf{Value variance \(K\).}
+
+\[
+
+K = \min\left(1, \frac{\text{Var}(Q_1,\dots,Q_k)}{0.25}\right).
+
+\]
+
+Variance among top-\(k\) child values signals disagreement inside the tree.
+
+\textbf{Phase multiplier.} \(\phi\) scales uncertainty according to stones on board (linear, exponential, or piecewise profile).
+
+\end{frame}
+
+\begin{frame}{Uncertainty Metric (2/2)}
+
+\small
+
+\textbf{Interpretation.}
+
+\begin{itemize}
+
+  \item Early game: many positions have high entropy, so we only want to trigger on extremely ambiguous openings.
+
+  \item Midgame: both entropy and child-value variance increase, so gating kicks in more often.
+
+  \item Endgame: fewer moves remain; the cost of mistakes skyrockets, so we reweight uncertainty upward via \(\phi\).
+
+\end{itemize}
+
+\textbf{Thresholds.}
+
+\begin{itemize}
+
+  \item \(\theta_{\text{query}}\): when \(\mathcal{U} > \theta_{\text{query}}\), query the ANN.
+
+  \item \(\theta_{\text{deep}}\): sometimes offset from \(\theta_{\text{query}}\); when exceeded, we run deep search even if we already consulted memory.
+
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{Recursive Deep Search Complexity}
+
+\small
+
+\[
+
+\text{Visits}(d) = V_{\text{deep}} \sum_{i=0}^{d} \prod_{j=0}^{i-1} b_j,
+
+\]
+
+where \(b_j\) is branching factor at recursion depth \(j\).
+
+\textbf{Example.}
+
+\begin{itemize}
+
+  \item \(V_{\text{deep}} = 10{,}000\), \(b_0 = 1\), \(b_1 = 3\), \(b_2 = 5\).
+
+  \item \(\text{Visits}(2) = 10{,}000(1 + 1 + 3 + 15) = 200{,}000\).
+
+\end{itemize}
+
+\textbf{Implications.}
+
+\begin{itemize}
+
+  \item Keeping activation rates low (5–10\%) is essential to stay within compute budgets.
+
+  \item Max recursion depth \(=3\) prevents runaway exponential expansion.
+
+  \item Cache hits amortize cost: once a deep subtree is cached, future matches reuse the 10k-visit analysis instantly.
+
+\end{itemize}
+
+\end{frame}
+
+%============================================================
+
+\section{Part 4: Architecture and Scripts \\ \small "Match runners, ANN pipelines, monitors, and rag-store analyzers choreograph every move we test."}
+
+\begin{frame}{Pipeline Overview}
+
+\small
+
+\begin{center}
+
+\begin{tikzpicture}[
+
+    stage/.style={draw,rounded corners,minimum width=2.3cm,minimum height=0.85cm,align=center,fill=blue!8,font=\scriptsize},
+
+    arrow/.style={-Latex,thick},
+
+    lbl/.style={font=\tiny},
+
+    node distance=1.3cm
+
+]
+
+% top row
+
+\node[stage] (raw) {KataGo NN\\(maxVisits=1)};
+
+\node[stage,right=of raw] (mcts) {Custom MCTS\\(800 visits)\newline Top moves, Q-stats};
+
+% bottom row
+
+\node[stage,below=0.9cm of raw] (unc) {Uncertainty\\Estimator};
+
+\node[stage,right=of unc] (query) {ANN Query\\sym-hash match};
+
+\node[stage,right=of query] (decision) {Decision\\(blend / force / deep)};
+
+\node[stage,right=of decision] (rec) {Recursive Deep Search\\(deep visits, depth $\le 3$)};
+
+\node[stage,below=of rec] (store) {Store Contexts\\sym-hash $\rightarrow$ memory};
+
+% arrows
+
+\draw[arrow] (raw) -- node[lbl,above]{policy, value} (mcts);
+
+\draw[arrow] (mcts) -- node[lbl,right]{Q-stats} (unc);
+
+\draw[arrow] (unc) -- node[lbl,above]{if $\mathcal{U}>\theta$} (query);
+
+\draw[arrow] (query) -- node[lbl,above]{neighbors} (decision);
+
+\draw[arrow] (decision) -- node[lbl,above]{trigger} (rec);
+
+\draw[arrow] (rec) -- node[lbl,above]{contexts} (store);
+
+\draw[arrow] (decision) |- +(0,-0.9) -| node[lbl,pos=0.25,below]{move output} (mcts.south);
+
+\end{tikzpicture}
+
+\end{center}
+
+\end{frame}
+
+\begin{frame}{Pipeline Overview (2/2)}
+
+\small
+
+\textbf{Life of a single move.}
+
+\begin{enumerate}
+
+  \item \textbf{Neural eval.} \code{KataGoNetworkEvaluator} asks the engine for raw policy/value (1 visit).
+
+  \item \textbf{Baseline search.} \code{CustomMCTS} runs 800 visits using that prior and returns top moves + statistics.
+
+  \item \textbf{Gate.} \code{DataGoBot.compute\_uncertainty} calculates \(\mathcal{U}\). If below threshold, we accept the baseline move.
+
+  \item \textbf{Memory.} Otherwise, compute sym hash, query ANN, check relevance.
+
+  \item \textbf{Action.} Either trust the stored move, force-explore it, or run deeper search (with recursion). All deep search nodes are stored with multi-context metadata.
+
+  \item \textbf{Stats.} Each move logs \(\mathcal{U}\), query hits, recursion counts, run timings, and more to the match log for later analysis.
+
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{\code{run\_datago\_recursive\_match.py} (1/2)}
+
+\scriptsize
+
+\textbf{Pre-game.}
+
+\begin{itemize}
+
+  \item Parse YAML config (thresholds, deep-search visits, recursion depth).
+
+  \item Launch KataGo GTP process (configurable path/model/config).
+
+  \item Initialize \code{BoardState} with canonicalization and history tracking.
+
+  \item Create in-memory ANN index and optionally load existing contexts from JSON.
+
+\end{itemize}
+
+\textbf{Main loop per move.}
+
+\begin{enumerate}
+
+  \item Ask KataGo to play (via \code{GTPController}) with current \code{maxVisits}.
+
+  \item Compute \(\mathcal{U}\); if low, log "simple move" stats.
+
+  \item If high, query ANN; decide whether to reuse or deepen.
+
+  \item Run recursion: for each flagged child, set \code{maxVisits} to deep value, analyze child board, compute child uncertainty, continue if threshold exceeded and depth limit not hit.
+
+  \item Store results (sym hash, policy vector, ownership map, child nodes) in \code{PositionContext}.
+
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{\code{run\_datago\_recursive\_match.py} (2/2)}
+
+\small
+
+\textbf{Logging.}
+
+\begin{itemize}
+
+  \item For each move: \(\mathcal{U}\), query hits, deep search timing, recursion depth, sym hash, child hashes.
+
+  \item After each game: aggregated stats (RAG queries, hits, deep searches, recursion count, unique positions, average uncertainty, final score).
+
+  \item After match: overall stats across all games.
+
+\end{itemize}
+
+\textbf{Outputs.}
+
+\begin{itemize}
+
+  \item Human-readable log (e.g., \code{extended\_match\_20251116\_155221.log}).
+
+  \item Serialized contexts (currently kept in-memory during a run; rag store handles persistent versions).
+
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{\code{rag\_store/game\_analyzer.py}}
+
+\small
+
+\textbf{Goal.} Populate the ANN memory offline by reanalyzing flagged positions with high visit counts.
+
+\textbf{Process.}
+
+\begin{enumerate}
+
+  \item Read \code{rag\_files\_list.csv} to know which JSON dumps to process.
+
+  \item For each flagged position:
+
+    \begin{itemize}
+
+      \item Launch KataGo in analysis mode with \code{maxVisits} set (e.g., 800 or 10k).
+
+      \item Record policy vectors, win rates, score leads, ownership maps, child nodes (with visits/Q/lcb).
+
+      \item Store everything into \code{rag\_output/rag\_database.json}.
+
+    \end{itemize}
+
+  \item Provide quick-test mode to limit positions/visits for sanity checks.
+
+\end{enumerate}
+
+\textbf{Usage example.}
+
+\[
+
+\code{CUDA\_VISIBLE\_DEVICES=7 python game\_analyzer.py --max-visits 800}.
+
+\]
+
+\end{frame}
+
+\begin{frame}{Monitoring (\code{tuning/phase2/monitor.py})}
+
+\small
+
+\textbf{Purpose.} Keep an eye on GPU utilization, RAM usage, disk space, and experiment progress in real time.
+
+\textbf{Implementation.}
+
+\begin{itemize}
+
+  \item Uses \code{psutil} for CPU/RAM/disk stats, \code{nvidia-smi} for GPU (utilization, memory, temperature).
+
+  \item Clears terminal every refresh; prints system stats, GPU bars, RAM/disk usage, and latest tuning results from \code{tuning\_results}.
+
+\end{itemize}
+
+\textbf{Why we use it.}
+
+\begin{itemize}
+
+  \item Deep recursive searches can saturate GPU memory quickly; this monitor alerts us.
+
+  \item Disk usage builds up because match logs are verbose; monitor warns when near capacity.
+
+\end{itemize}
+
+\end{frame}
+
+%============================================================
+
+\section{Part 5: Experiments in Depth \\ \small "Synthetic stress, real-network failures, tuned recoveries: every run quantified via activation, wins, and cache hits."}
+
+\begin{frame}{Experiment Strategy}
+
+\small
+
+We ran a series of matches, each targeting a different aspect of the system:
+
+\begin{enumerate}
+
+  \item \textbf{Experiment A:} Quick smoke test using synthetic data to stress recursion and logging (20 moves).
+
+  \item \textbf{Experiment B:} Full 10-game match with synthetic data to stress compute budgets (threshold 0.37).
+
+  \item \textbf{Experiment C:} Real KataGo output but no threshold retuning (0.37) to show failure mode (0\% activations).
+
+  \item \textbf{Additional studies:} Synthetic vs real comparisons, activation vs win rate charts, RAG hit ratios, alternative thresholds, etc.
+
+\end{enumerate}
+
+Each experiment uses the same scripts but modifies YAML configs (thresholds, visits, recursion depth). We highlight both procedures and results.
+
+\end{frame}
+
+\begin{frame}{Experiment A -- Quick Test (Setup \& Metrics)}
+
+\small
+
+\textbf{Objective}
+
+\[
+
+\text{Validate pipeline: } \mathcal{U}\rightarrow\text{ANN}\rightarrow\text{Deep Search}\rightarrow\text{Storage}.
+
+\]
+
+\textbf{Configuration}
+
+\[
+
+\theta=0.35,\quad d_{\max}=2,\quad V_{\text{deep}}=2000,\quad T_{\text{moves}}=20.
+
+\]
+
+\textbf{Summary Table}
+
+\begin{table}
+
+\scriptsize
+
+\centering
+
+\begin{tabular}{lccc}
+
+\toprule
+
+Metric & Symbol & Value & Notes \\
+
+\midrule
+
+Deep search probability & $p_{\text{deep}}$ & $19/20=0.95$ & Synthetic entropy forces activation \\
+
+Recursion depth=2 ratio & $p_{d=2}$ & $0.75$ & Validates tree expansion \\
+
+Stored positions & $N_{\text{pos}}$ & 143 & \\
+
+Stored contexts & $N_{\text{ctx}}$ & 146 & $\Rightarrow \bar{c}=1.02$ per position \\
+
+Average uncertainty & $\bar{\mathcal{U}}$ & 0.359 & \\
+
+Cache hit rate & $p_{\text{hit}}$ & $4/18=0.22$ & 4 exact matches \\
+
+Deep search time & $t_{\text{deep}}$ & $2.5\,$s (first), $50$--$500\,$ms later & Warm-up vs recursive \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\end{frame}
+
+\begin{frame}{Experiment B -- Synthetic Match}
+
+\small
+
+\textbf{Config:}
+
+\[
+
+\theta=0.370,\quad d_{\max}=3,\quad V_{\text{deep}}=2000,\quad G=10\ \text{games},\quad \text{Dirichlet policies}.
+
+\]
+
+\textbf{Aggregated Metrics}
+
+\begin{table}
+
+\scriptsize
+
+\centering
+
+\begin{tabular}{lcc}
+
+\toprule
+
+Metric & Symbol & Value \\
+
+\midrule
+
+Win/loss/draw & -- & $9/0/1$ \\
+
+RAG queries & $Q$ & $296$ \\
+
+Deep searches & $D$ & $1411$ \\
+
+Recursive searches & $R$ & $1232$ (87\% of $D$) \\
+
+Unique positions & $N_{\text{pos}}$ & $3017$ \\
+
+Contexts & $N_{\text{ctx}}$ & $3144$ (1.0 per position) \\
+
+Average uncertainty & $\bar{\mathcal{U}}$ & $0.376$ \\
+
+Activation rate & $p_{\text{act}}$ & $296/468 = 0.63$ \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\textbf{Scoring:} Frequent move-cap hits (100) produce margins like $B+338.5$ because deep recursion prunes the opponent quickly and the evaluator stops early.
+
+\end{frame}
+
+\begin{frame}{Experiment B -- Synthetic Match (Implications)}
+
+\small
+
+\textbf{Compute Cost}
+
+\[
+
+\text{Time fraction}_{\text{deep}} \approx 0.95,\quad \text{time}_{\text{deep}} \gg \text{time}_{\text{shallow}}.
+
+\]
+
+\textbf{Observations}
+
+\begin{enumerate}
+
+  \item Synthetic activations (\(63\%\)) are unrealistically high; real entropy distributions require retuning.
+
+  \item Despite high cost, this run generated \(N_{\text{pos}}=3017\) contexts, ideal for testing ANN retrieval and cache hits in later experiments.
+
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{Experiment C -- Real NN Untuned}
+
+\small
+
+\textbf{Config:}
+
+\[
+
+\theta=0.370,\quad d_{\max}=3,\quad V_{\text{deep}}=2000,\quad G=10,\quad \text{real KataGo outputs}.
+
+\]
+
+\textbf{Result Table}
+
+\begin{table}
+
+\scriptsize
+
+\centering
+
+\begin{tabular}{lcc}
+
+\toprule
+
+Metric & Value & Notes \\
+
+\midrule
+
+Win/loss/draw & $0/10/0$ & Matches revert to 800 v 800 \\
+
+Activation rate & $0\%$ & Real entropy \(\max \approx 0.21 < \theta\) \\
+
+Average uncertainty & $0.120$ & Confirms the gating mismatch \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\textbf{Lesson.} Thresholds tuned to synthetic data do not trigger on real networks; gating must match the actual entropy distribution.
+
+\end{frame}
+
+\begin{frame}{Threshold Sensitivity: Activation vs Win Rate}
+
+\footnotesize
+
+\begin{tikzpicture}
+
+\begin{axis}[
+
+    width=0.9\linewidth,
+
+    height=0.5\linewidth,
+
+    xlabel={Scenario},
+
+    ylabel={Rate (0--1)},
+
+    ymin=0, ymax=1,
+
+    xtick={0,1,2},
+
+    xticklabels={Real tuned ($\theta=0.15$), Synthetic ($\theta=0.37$), Real untuned ($\theta=0.371$)},
+
+    x tick label style={text width=3cm, align=center},
+
+    ymajorgrids=true,
+
+    grid style=dashed,
+
+    legend style={font=\scriptsize,at={(0.72,0.5)},anchor=west},
+
+    title={Effect of threshold choice on activation, win rate, cache efficiency}
+
+]
+
+\addplot+[mark=o,thick,color=blue] coordinates {(0,0.051) (1,0.632) (2,0.0)};
+
+\addlegendentry{$p_{\text{activation}}$}
+
+\addplot+[mark=triangle*,thick,color=orange] coordinates {(0,0.80) (1,0.90) (2,0.0)};
+
+\addlegendentry{$p_{\text{win}}$}
+
+\addplot+[mark=square*,thick,color=green!60!black] coordinates {(0,0.152/328) (1,0.296/1411) (2,0.0)};
+
+\addlegendentry{Hits / Deep Searches}
+
+\end{axis}
+
+\end{tikzpicture}
+
+\end{frame}
+
+\begin{frame}{Threshold Sensitivity Analysis}
+
+\scriptsize
+
+\textbf{Blue (activation rate).}
+
+\[
+
+p_{\text{act}}(\theta) = \frac{\text{RAG queries}}{\text{total moves}}.
+
+\]
+
+\begin{itemize}
+
+  \item \(\theta = 0.37\) (synthetic): \(p_{\text{act}} \approx 0.63\). Almost 2/3 of moves trigger deep recursion—like a car hitting the brakes at every corner.
+
+  \item \(\theta = 0.15\) (real tuned): \(p_{\text{act}} \approx 0.051\). Only 5\% of moves trigger deep search—selective braking on sharp turns.
+
+  \item \(\theta = 0.371\) (real untuned): \(p_{\text{act}} = 0\). Gate never fires; RAG is off.
+
+\end{itemize}
+
+\textbf{Orange (win rate).}
+
+\[
+
+p_{\text{win}}(\theta) = \frac{\text{wins}}{\text{games}}.
+
+\]
+
+\begin{itemize}
+
+  \item \(\theta = 0.37\): \(p_{\text{win}} \approx 0.90\) (9/10 wins) but with heavy compute.
+
+  \item \(\theta = 0.15\): \(p_{\text{win}} \approx 0.80\) with selective gating (proof RAG adds value).
+
+  \item \(\theta = 0.371\): \(p_{\text{win}} = 0\) because augmentation never engages.
+
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}
+
+\textbf{Green (hits/deep searches).}
+
+\[
+
+\text{Hit ratio} = \frac{\text{cache hits}}{\text{deep searches}}.
+
+\]
+
+\begin{itemize}
+
+  \item Real tuned: \(0.152/328 \approx 0.46\%\) per deep search, or \(6.6\) hits per query once memory is populated.
+
+  \item Synthetic: \(0.296/1411 \approx 0.021\) because Dirichlet samples rarely repeat.
+
+  \item Real untuned: no deep searches, so the ratio is \(0\).
+
+\end{itemize}
+
+\textbf{Takeaway.}
+
+The blue curve shows "when" the gate fires, the orange curve shows "why" (win payoff), and the green curve shows "how much" knowledge is reused. \(\theta = 0.15\) is the sweet spot: low activation (5\%), high win rate (80\%), and strong cache leverage (6.6 hits/query)—like a fast driver braking only where necessary.
+
+\end{frame}
+
+\begin{frame}{Experiment Dashboard (Summary Stats)}
+
+\small
+
+\begin{table}
+
+\tiny
+
+\centering
+
+\begin{tabular}{lccccccc}
+
+\toprule
+
+Run (log) & $\theta$ & Data type & RAG queries & Deep searches & Result (W-L-D) & $\bar{\mathcal{U}}$ & Notes \\
+
+\midrule
+
+Quick test & 0.35 & Synthetic & 19 & 19 & 1-0-0 & 0.359 & Smoke test for recursion / storage \\
+
+Extended\_155221 & 0.370 & Synthetic & 296 & 1411 & 9-0-1 & 0.376 & Heavy activation stress test \\
+
+Extended\_162336 & 0.370 & Real NN & 0 & 0 & 0-10-0 & 0.120 & No gating (entropy too low) \\
+
+Extended\_162735 & 0.150 & Real NN & 23 & 328 & 8-0-2 & 0.080 & Tuned gating, strong wins \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\textbf{Key messages.}
+
+\begin{enumerate}
+
+  \item Synthetic runs validated the pipeline under extreme conditions.
+
+  \item Untuned real run proved why thresholds must match the network's entropy.
+
+  \item Tuned real run showed RAG delivering consistent wins with small activation rates.
+
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{Logs in Action: Single Move \& Match-Level Metrics}
+
+\scriptsize
+
+\begin{columns}[T,onlytextwidth]
+
+\column{0.48\linewidth}
+
+\textbf{Per-move trace (synthetic)}\\[2pt]
+
+\fbox{\parbox{0.9\linewidth}{\code{Move 95: DataGo (Black) plays C11\\[1pt] [unc=0.393, DEEP, 1304ms]}}}\\[4pt]
+
+\fbox{\parbox{0.9\linewidth}{\code{\ \rightarrow Deep search (depth=1, unc=0.727)}}}\\[6pt]
+
+\textbf{Interpretation}
+
+\begin{itemize}
+
+  \item \(\mathcal{U}=0.393 > \theta\) triggers deep analysis.
+
+  \item Recursion depth \(=1\) with high uncertainty (0.727), confirming the gating behavior.
+
+\end{itemize}
+
+\column{0.48\linewidth}
+
+\textbf{Match summary (Game 10)}\\[2pt]
+
+\fbox{\parbox{0.9\linewidth}{\code{Moves=468, RAG queries=296, hits=135,\\ deep=1411, recursive=1232, unique=3017}}}\\[6pt]
+
+\textbf{Interpretation}
+
+\begin{itemize}
+
+  \item Raw counts feed directly into our dashboard: activation rate \(=296/468\), hit rate \(=135/296\), etc.
+
+  \item Recursive count (1232) shows how often deep search spawned child analyses.
+
+\end{itemize}
+
+\end{columns}
+
+\vspace{6pt}
+
+\textbf{Why it matters.}
+
+\begin{itemize}
+
+  \item Every statistic in the experiment tables and plots is traceable to these logs—no manual reconstruction.
+
+  \item Recursion traces verify depth limits and sym-hash integrity (e.g., depth=1 $\rightarrow$ depth=2 when \(\mathcal{U} > 0.70\)).
+
+  \item Persistent logging makes offline analysis possible without re-running expensive matches.
+
+\end{itemize}
+
+\end{frame}
+
+%============================================================
+
+\section{Part 6: Lessons and Roadmap \\ \small "We already beat KataGo 9/10 (synthetic) and 8/10 (real tuned); now blending, pro-seeding, and asymmetric matches push the frontier."}
+
+\begin{frame}{Validated Accomplishments: $9/10$ Wins vs Baseline KataGo}
+
+\scriptsize
+
+\textbf{Game-theoretic result.}
+
+\[
+
+\max_{\pi_{\text{DataGo}}}\min_{\pi_{\text{KataGo}}} \mathbb{E}[\text{Score}(s_T)] \approx \text{Score}_{\text{DataGo}} - \text{Score}_{\text{KataGo}} > 0
+
+\]
+
+In the synthetic stress run, DataGo delivered $9$ wins out of $10$, i.e., $\mathbb{P}(\text{win})=0.9$, demonstrating a shift in the payoff matrix when RAG is engaged.
+
+\textbf{Key metrics across runs}
+
+\[
+
+\begin{aligned}
+
+&\text{Activation rate} = \frac{\text{RAG queries}}{\text{moves}}, 
+
+&\text{Cache efficiency} = \frac{\text{hits}}{\text{queries}},  
+
+\quad&\text{Recursion intensity} = \frac{\text{recursive searches}}{\text{deep searches}}.
+
+\end{aligned}
+
+\]
+
+\textbf{Table: RAG pipeline highlights}
+
+\begin{table}
+
+\scriptsize
+
+\centering
+
+\begin{tabular}{lccc}
+
+\toprule
+
+Component & Metric & Best value & Implication \\
+
+\midrule
+
+Uncertainty gate & $p_{\text{activation}}$ (synthetic) & $0.63$ & Stress-tested recursion \\
+
+Cache & $p_{\text{hit}}$ (real tuned) & $6.6$ hits/query & Memory stores true value \\ 
+
+Recursive search & $R/D$ (synthetic) & $0.87$ & Deep tree expansion works \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\end{frame}
+
+\begin{frame}{Remaining Gaps: Mathematical Targets}
+
+\small
+
+\textbf{1. Blending not yet implemented.}
+
+\[
+
+\pi'(a) = (1-\beta)\,\pi_{\text{net}}(a) + \beta\,\pi_{\text{RAG}}(a), \quad \beta=0.4 \text{ (scheduled)}.
+
+\]
+
+Currently we force exploration; adopting $\pi'$ will test whether cached priors shift the Nash equilibrium further.
+
+\textbf{2. Cross-game generalization.}
+
+\[
+
+\mathbb{E}_{s \sim \text{pro games}}[\text{Rel}(s)]\ \text{not yet maximized}.
+
+\]
+
+Need pro-game ingestion to raise cross-game similarity scores.
+
+\textbf{3. Missing agreement metrics.}
+
+\[
+
+\text{Agreement} = \frac{|\{a : \pi_{\text{DataGo}}(a) = \pi_{\text{KataGo}}(a)\}|}{|\text{moves}|},
+
+\]
+
+not yet logged—essential for quantifying forced-exploration effectiveness vs baseline.
+
+\end{frame}
+
+\begin{frame}{Roadmap: Experiments Backed by Equations}
+
+\small
+
+\begin{enumerate}
+
+  \item \textbf{Implement blending} – rerun matches with
+
+  \[
+
+  V'(s) = \lambda V_{\text{net}}(s) + (1-\lambda)V_{\text{RAG}}(s).
+
+  \]
+
+  \item \textbf{Asymmetric visit tests} – test DataGo($400$ visits + RAG) vs KataGo($800$ visits), measuring $\Delta \text{Elo}$ and whether retrieval compensates for lower compute.
+
+  \item \textbf{Threshold sweep} – map $\theta \in [0.11,0.18]$ to 
+
+  \[
+
+  f(\theta) = (\text{win rate}(\theta),\ \text{activation}(\theta),\ \text{compute cost}(\theta)).
+
+  \]
+
+  \item \textbf{RAGFlow integration} – pre-seed ANN with thousands of pro positions, aiming for $\mathbb{E}[p_{\text{hit}}] \rightarrow 0.5$.
+
+  \item \textbf{Unified metrics dashboard} – aggregate logs, monitors, rag store stats into one analytic surface (activation vs win rate vs cache hits).
+
+\end{enumerate}
+
+\end{frame}
+
+\begin{frame}{What We Proved \& Why It Matters}
+
+\small
+
+\textbf{Statements.}
+
+\begin{itemize}
+
+  \item DataGo + RAG achieves $\mathbb{P}(\text{win}) \approx 0.9$ (synthetic) and $0.8$ (real tuned) vs baseline KataGo—a measurable improvement in the zero-sum payoff.
+
+  \item Proper thresholding (real $\theta=0.15$) yields strong wins with only $5\%$ activation, reducing compute to $\sim\!2.4k$ visits/move.
+
+  \item The pipeline (uncertainty $\rightarrow$ ANN $\rightarrow$ recursion $\rightarrow$ storage) is fully reproducible via logs, monitors, and rag store analyzers.
+
+\end{itemize}
+
+\textbf{Why it matters.} We have a mathematically grounded, data-rich foundation proving RAG is feasible and advantageous even before blending. The next wave—blending priors, cross-game memory, and pro-ingestion—builds on this verified base.
+
+\end{frame}
+
+\begin{frame}{Thank You \& Questions?}
+
+\small
+
+\begin{itemize}
+
+  \item Retrieval-augmented DataGo showed repeatable gains: \(p_{\text{win}}=0.9\) (synthetic) and \(0.8\) (real tuned) against KataGo.
+
+  \item Selective gating + recursive caches turned 5\% activations into 6.6 hits/query and \(\sim\!2.4\text{k}\) visits/move efficiency.
+
+  \item Next milestones: blend cached priors, seed with pro games via RagFlow, and push asymmetric visit matches.
+
+\end{itemize}
+
+\vspace{0.4cm}
+
+\centering
+
+\textbf{Thank you!} \quad|\quad \textbf{We welcome your questions and feedback.}
+
+\end{frame}
+
+\begin{frame}{Appendix}
+
+\small
+
+\textbf{The following slides were cut for time.}
+
+\end{frame}
+
+\begin{frame}{Big Players \& Industry Motivation}
+
+\small
+
+\textbf{Google / DeepMind.}
+
+\begin{itemize}
+
+  \item Invested hundreds of TPUs to crack Go; AlphaGo became a flagship demo for self-play RL.
+
+  \item Follow-up work like MuZero generalized the game-learning approach to chess, shogi, atari.
+
+\end{itemize}
+
+\textbf{Open communities (KataGo, Leela Zero).}
+
+\begin{itemize}
+
+  \item Democratized access to strong networks with continuous training updates.
+
+  \item Provided a playground for researchers to bolt on new ideas (like retrieval, heuristics).
+
+\end{itemize}
+
+\textbf{Our ambition.}
+
+\begin{itemize}
+
+  \item Prove that selective retrieval + recursive deep search can beat the best open models.
+
+  \item Show that you don't need Google-scale clusters—just smart gating, caching, and integration.
+
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}{Relevance and Blending}
+
+\small
+
+\textbf{Relevance.}
+
+\[
+
+\text{Rel} = \alpha_{\text{policy}}\cdot \text{cosine}(\pi_{\text{query}},\pi_{\text{stored}}) + \alpha_{\text{winrate}}\cdot (1-|w_q-w_s|) + \cdots
+
+\]
+
+Weights \((0.40,0.25,0.10,0.15,0.05,0.05)\) correspond to policy, win rate, score lead, visit distribution, stone count, komi.
+
+\textbf{Success criteria.}
+
+\begin{itemize}
+
+  \item If \(\text{Rel} \ge \tau\) and the sym hash matches exactly, we treat the stored move as reliable enough to play (or blend).
+
+  \item Otherwise we force-explore stored best moves but still rely on deep search for final choice.
+
+\end{itemize}
+
+\textbf{Blending formula (future).}
+
+\[
+
+\pi'(a) = (1-\beta)\pi_{\text{net}}(a) + \beta \pi_{\text{RAG}}(a),\quad \beta = 0.4.
+
+\]
+
+Implementation of blending is currently in TODO; we currently force exploration instead.
+
+\end{frame}
+
+\begin{frame}{Experiment D -- Real NN Tuned (Part 1)}
+
+\small
+
+\textbf{Config:}
+
+\[
+
+\theta=0.150,\quad d_{\max}=3,\quad V_{\text{deep}}=2000,\quad G=10,\quad \text{real KataGo}.
+
+\]
+
+\textbf{Win/Loss Table}
+
+\begin{table}
+
+\scriptsize
+
+\centering
+
+\begin{tabular}{lcc}
+
+\toprule
+
+Metric & Value & Notes \\
+
+\midrule
+
+Win/loss/draw & $8/0/2$ & Strong advantage even without blending \\
+
+Activation rate & $5.1\%$ & $23$ queries / $454$ moves \\
+
+Deep searches & $328$ & Recursion $314$ (95.7\%) \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\textbf{Averages}
+
+\[
+
+\bar{\mathcal{U}}=0.080,\quad \text{visits}_{\text{effective}}\approx 2{,}446.
+
+\]
+
+\end{frame}
+
+\begin{frame}{Experiment D -- Real NN Tuned (Part 2)}
+
+\small
+
+\textbf{Memory/Cache Stats}
+
+\begin{table}
+
+\scriptsize
+
+\centering
+
+\begin{tabular}{lcc}
+
+\toprule
+
+Metric & Value & Notes \\
+
+\midrule
+
+Unique positions & $1070$ & Real analyses 10k visits \\
+
+Contexts & $1211$ & $\bar{c}=1.13$ per position \\
+
+Cache hits & $152$ & $152/23=6.6$ hits per query \\
+
+Latency gain & $\approx 10\times$ & $500$ms $\rightarrow$ $<50$ms on hits \\
+
+\bottomrule
+
+\end{tabular}
+
+\end{table}
+
+\textbf{Takeaway.} Properly tuned gating unlocks consistent wins, reduced compute, and high-quality stored contexts—setting the stage for future blending and pro-game seeding.
+
+\end{frame}
+
+\begin{frame}{Multi-Armed Bandits \& Regret (MCTS View)}
+
+\small
+
+\textbf{Setup.}
+
+\begin{itemize}
+
+  \item We have \(K\) actions (``arms''); at each time \(t = 1,\dots,T\), we pick an arm \(a_t \in \{1,\dots,K\}\).
+
+  \item Each arm \(k\) has an (unknown) expected reward \(\mu_k\); let \(\mu^\star = \max_k \mu_k\).
+
+  \item Goal: \emph{minimize regret} from not always picking the best arm.
+
+\end{itemize}
+
+\textbf{Cumulative regret.}
+
+\[
+
+R_T = T\,\mu^\star - \mathbb{E}\!\left[\sum_{t=1}^T r_t\right]
+
+      = \sum_{k=1}^K \Delta_k\,\mathbb{E}[N_k(T)],\quad
+
+\Delta_k = \mu^\star - \mu_k,
+
+\]
+
+where \(N_k(T)\) is how many times arm \(k\) was chosen.
+
+\end{frame}
+
+\begin{frame}{Multi-Armed Bandits \& Regret (MCTS View)}
+
+\small
+
+\textbf{Bandits \(\rightarrow\) MCTS.}
+
+\begin{itemize}
+
+  \item Each node \(s\) in the tree is a bandit; each legal move \(a\) is an arm with unknown value $Q(s,a)$.
+
+  \item UCT (KataGo-style MCTS) uses an upper-confidence rule:
+
+  \[
+
+    a^\star = \arg\max_a \Big(
+
+      Q(s,a) \;+\; c_{\text{puct}}\,P_{\theta}(s,a)\,\frac{\sqrt{N(s)}}{1+N(s,a)}
+
+    \Big),
+
+  \]
+
+  balancing exploration (high uncertainty) and exploitation (high mean value).
+
+  \item Informally: good MCTS bandit rules keep \emph{regret low} by not wasting too many visits on bad moves while still discovering strong ones.
+
+\end{itemize}
+
+\textbf{DataGo tie-in.} Our uncertainty gating + RAG memory act like a smarter bandit prior: in high-regret states, we inject cached deep analyses to steer visits away from bad arms.
+
+\end{frame}
+
+\end{document}

@@ -1,0 +1,676 @@
+# Parameter Tuning Plan for RAG-Enhanced AlphaGo
+
+## Project Overview
+This project integrates a Retrieval-Augmented Generation (RAG) system with KataGo's MCTS to improve play on uncertain/complex positions by storing and retrieving previously analyzed game states.
+
+## Hardware & Time Constraints
+- **Hardware:** NVIDIA A100 GPU (80GB VRAM)
+- **Time Limit:** 4 days (96 hours total)
+- **Strategy:** Aggressive parallelization, reduced search spaces, early stopping
+- **Key Optimization:** Run 32-64 games in parallel, use GPU batch processing
+
+---
+
+## PARAMETER CATEGORIES AND TUNING STRATEGY
+
+### CATEGORY 1: Uncertainty Detection Parameters (MUST BE TUNED TOGETHER)
+These parameters jointly define what constitutes an "uncertain" position worthy of storage/retrieval.
+
+**Parameters:**
+- `w1`: Weight for policy cross-entropy (E)
+- `w2`: Weight for value distribution sparseness (K)
+- `phase_function_type`: Type of phase function (linear, exponential, piecewise)
+- `phase_function_coefficients`: Coefficients for the phase function based on stones_on_board
+
+**Combined Function:** `(w1*E + w2*K) * phase(stones_on_board)`
+
+**Phase Function Options:**
+- **Linear**: `phase(s) = a*s/361 + b` where s = stones_on_board
+  - Parameters: [a, b] control slope and intercept
+  - Example: [0.5, 0.75] gives phase from 0.75 (opening) to 1.25 (endgame)
+- **Exponential**: `phase(s) = a*exp(b*s/361) + c`
+  - Parameters: [a, b, c] control exponential growth
+  - Example: [0.5, 0.5, 0.5] emphasizes late game uncertainty
+- **Piecewise**: Different multipliers for early/mid/late
+  - Early (s < 120): multiplier = a
+  - Mid (120 ≤ s < 240): multiplier = b  
+  - Late (s ≥ 240): multiplier = c
+  - Example: [0.8, 1.0, 1.2] increases emphasis as game progresses
+
+**Tuning Strategy:**
+1. **Method:** Coarse grid search with early stopping (4-day constraint)
+2. **Evaluation Metric:** Win rate against baseline KataGo
+3. **Search Space (REDUCED for time):**
+   - w1: [0.3, 0.5, 0.7] (3 values instead of 5)
+   - w2: [0.3, 0.5, 0.7] (3 values instead of 5)
+   - Constraint: w1 + w2 = 1.0 (normalized weights)
+   - Phase function: Start with Linear only
+   - Linear coefficients: Test 3 combinations
+     - [0.0, 1.0] - constant phase (no game phase effect)
+     - [0.5, 0.75] - increases from early to late game
+     - [-0.5, 1.25] - decreases from early to late game
+   - Total combinations: 3 (w1/w2) × 3 (phase configs) = 9
+4. **Phase Function Tuning:**
+   - Test linear function initially (simplest, most interpretable)
+   - If time permits after Phase 1, test exponential or piecewise
+   - Function takes stones_on_board as input, outputs phase multiplier
+5. **Validation (A100 OPTIMIZED):**
+   - Run 150-200 games per configuration (reduced from 500+)
+   - Use A100 batch parallelization: 32-64 games simultaneously
+   - Early stopping: if a config is clearly worse after 100 games, abort
+   - Track: win rate, average game length, GPU memory usage, phase distribution
+6. **Dependencies:** Must tune together because they define the threshold jointly
+
+**Output:** Optimal (w1, w2, phase_function_type, phase_coefficients) tuple
+**Time Budget:** 4-8 hours on A100 (supervised learning on ground truth database)
+
+---
+
+### CATEGORY 1b: Relevance Comparison Weights (MUST BE TUNED BEFORE CATEGORY 2)
+These weights determine how we compute similarity between a query position and RAG database entries.
+
+**Parameters (from claude_instructions.txt):**
+- `policy_weight`: Weight for policy distribution similarity (baseline: 0.40)
+- `winrate_weight`: Weight for winrate similarity (baseline: 0.25)
+- `score_lead_weight`: Weight for score lead similarity (baseline: 0.10)
+- `visit_distribution_weight`: Weight for visit/child node overlap (baseline: 0.15)
+- `stone_count_weight`: Weight for phase matching (baseline: 0.05)
+- `komi_weight`: Weight for komi matching (baseline: 0.05)
+- Constraint: All weights sum to 1.0
+
+**Combined Relevance Score:** 
+```
+relevance = policy_weight * policy_sim + 
+            winrate_weight * winrate_sim + 
+            score_lead_weight * score_lead_sim +
+            visit_distribution_weight * visit_sim +
+            stone_count_weight * stone_sim +
+            komi_weight * komi_sim
+```
+
+**Why This Must Be Tuned First:**
+- Phase 1b (uncertainty threshold tuning) relies on relevance scores to decide:
+  - Relevance >= 90%: Blend policy/value
+  - Relevance < 90%: Force exploration of best moves
+- Poor relevance weights → incorrect blending decisions → bad win rate measurements
+- Cannot properly evaluate uncertainty thresholds without accurate relevance scoring
+
+**Tuning Strategy:**
+1. **Method:** Supervised learning on ground truth database pairs
+2. **Ground Truth Creation:**
+   - Take pairs of positions from database where we KNOW they should match
+   - Compute relevance score with different weight combinations
+   - Also include negative examples (positions that should NOT match)
+   - Label pairs: 1.0 = perfect match, 0.0 = no match
+3. **Search Space (REDUCED):**
+   - Start with baseline weights from claude_instructions
+   - Test variations around baseline (±0.05, ±0.10)
+   - Grid search: ~20-30 weight combinations
+   - Focus on policy_weight (most important) and winrate_weight
+4. **Evaluation Metrics:**
+   - **ROC-AUC:** How well do relevance scores separate matches from non-matches?
+   - **Precision@90%:** Among pairs with relevance >= 90%, what % are true matches?
+   - **Recall@90%:** Among true matches, what % have relevance >= 90%?
+   - **Calibration:** Do relevance scores reflect actual similarity probability?
+5. **Validation:**
+   - Hold out 20% of position pairs for validation
+   - Test on different game phases (opening, mid-game, end-game)
+   - Ensure weights work across different uncertainty levels
+6. **Dependencies:** 
+   - Requires Phase 1a database (or separate labeled dataset)
+   - Must be done before Phase 1b (uncertainty threshold tuning)
+
+**Output:** Optimal relevance comparison weights
+**Time Budget:** 2-4 hours on A100 (fast, no game execution needed)
+
+---
+
+### CATEGORY 2: Uncertainty Threshold (DEPENDS ON CATEGORY 1 AND 1b)
+This parameter determines when to query the RAG database during gameplay.
+
+**Parameters:**
+- `uncertainty_threshold`: Cutoff value for (w1*E + w2*K)*phase
+- When uncertainty > threshold: Query RAG and potentially augment MCTS
+
+**Tuning Strategy:**
+1. **Method:** Game-based evaluation with static RAG database
+2. **Pre-requisite:** 
+   - Fixed w1, w2, phase_function from Category 1
+   - Fixed relevance weights from Category 1b
+3. **Search Space (REDUCED):** Percentile-based approach
+   - Test querying for top 5%, 10%, 15%, 20%, 25% uncertain positions
+   - Map percentiles to absolute thresholds using ground truth database
+4. **Evaluation Metrics:**
+   - **Win rate** vs baseline KataGo (primary metric)
+   - **RAG query rate** (% of positions that trigger lookup)
+   - **High relevance hit rate** (% of queries with relevance >= 90%)
+   - **Retrieval efficiency** (avg time per query)
+   - **RAG effectiveness** (win rate improvement per query)
+5. **Mode:** READ-ONLY database
+   - Use pre-populated RAG database from offline deep analysis
+   - Do NOT store new positions during tuning
+   - Focus purely on finding optimal query threshold
+6. **Constraints (A100):**
+   - Retrieval latency should not exceed 5ms per query
+   - Query overhead should not slow down overall gameplay
+   - Target: 10-15% query rate (sweet spot)
+7. **Validation (REDUCED):**
+   - 100 games per threshold value
+   - Parallel execution: 32-64 games simultaneously
+   - Early stopping if win rate clearly worse
+
+**Output:** Optimal storage_threshold value
+**Time Budget:** 8-10 hours on A100
+
+---
+
+### CATEGORY 3: Deep MCTS Search Parameters (CAN BE TUNED INDEPENDENTLY)
+Controls how deep MCTS searches when analyzing uncertain positions.
+
+**Parameters:**
+- `deep_mcts_max_depth`: Maximum tree depth for deep search
+- `convergence_threshold`: Value/policy stability threshold to stop search early
+
+**Tuning Strategy for deep_mcts_max_depth:**
+1. **Method:** Progressive depth testing
+2. **Search Space (REDUCED):** [1000, 2000, 5000, 10000] visits (4 values)
+3. **Evaluation Metrics:**
+   - Convergence rate (% of searches that converge)
+   - Average computation time per search (critical on A100)
+   - Quality of stored policy/value (tested via win rate)
+4. **Validation (REDUCED):**
+   - Test on 200-500 uncertain positions (reduced from 1000+)
+   - Compare depth N vs depth 2N to see diminishing returns
+   - 50-75 games per depth value
+5. **Trade-off:** Deeper = better quality but slower
+6. **A100 Optimization:** Use tensor cores for batch MCTS expansion
+
+**Tuning Strategy for convergence_threshold:**
+1. **Method:** Sensitivity analysis
+2. **Search Space (REDUCED):** 
+   - Policy convergence: [0.02, 0.05, 0.1] (3 values, skip 0.01)
+   - Value convergence: [0.01, 0.02, 0.05] (3 values)
+3. **Evaluation:**
+   - Early stopping efficiency
+   - Quality loss from early stopping
+4. **Validation:**
+   - Compare converged results vs. max depth results on 100 positions
+
+**Output:** Optimal (deep_mcts_max_depth, convergence_threshold)
+**Time Budget:** 8-10 hours on A100
+
+---
+
+### CATEGORY 4: Recursion Control (INDEPENDENT)
+Prevents infinite recursion during RAG lookups.
+
+**Parameters:**
+- `N`: Maximum complex-node depth (how many RAG lookups per game tree search)
+
+**Tuning Strategy:**
+1. **Method:** Incremental testing
+2. **Search Space (REDUCED):** [1, 2, 3, 5] (4 values, skip 10)
+3. **Evaluation Metrics:**
+   - Average lookups per move
+   - Total computation time per move
+   - Win rate improvement
+   - Risk of timeout/excessive computation
+4. **Constraints:**
+   - Total move time should not exceed reasonable game time limits
+   - Typical: 5-30 seconds per move depending on time control
+5. **Validation:**
+4. **Constraints (A100):**
+   - Total move time should not exceed reasonable game time limits
+   - Typical: 5-30 seconds per move depending on time control
+5. **Validation (REDUCED):**
+   - Test with 30-50 games per N value (reduced for speed)
+   - Test various board positions (early/mid/late game)
+   - Ensure no pathological cases cause excessive recursion
+
+**Output:** Optimal N value
+**Time Budget:** 3-4 hours on A100 (parallel with Category 3)
+
+---
+
+### CATEGORY 5: Relevancy Comparison Parameters (MUST BE TUNED TOGETHER)
+Controls when a retrieved RAG entry is considered relevant enough to use.
+
+**Parameters:**
+- `relevancy_threshold`: Minimum similarity score to use RAG entry (mentioned as 90% baseline)
+- `feature_comparison_weights`: Weights for comparing different vector features
+
+**Features to Compare:**
+- Policy distribution similarity
+- Value function similarity
+- Ownership map similarity
+- Score lead similarity
+- Move info similarity
+- Komi matching (exact or weighted)
+
+**Tuning Strategy:**
+1. **Method:** Lightweight supervised learning (time-optimized for A100)
+2. **Data Collection Phase (FAST):**
+   - Use cached positions from Phase 1-2 games (no new game generation needed)
+   - Auto-label: positions from same game within 5 moves = relevant
+   - Generate 1000-2000 position pairs (sufficient for initial model)
+3. **Weight Optimization (GPU-ACCELERATED):**
+   - Use logistic regression (fast on GPU via PyTorch/TensorFlow)
+   - Features: cosine similarity of each component
+   - Target: predict relevance
+   - Training time: ~30 minutes on A100
+4. **Threshold Tuning:**
+   - After weights are learned, tune threshold on validation set
+   - Test range (REDUCED): [0.75, 0.80, 0.85, 0.90] (4 values instead of 6)
+   - Quick validation: 50-75 games per threshold
+5. **Evaluation Metrics:**
+   - False positive rate (using irrelevant positions)
+   - False negative rate (rejecting relevant positions)
+   - Win rate when threshold is met
+6. **Validation (REDUCED):**
+   - Use cached game data for speed
+   - Test across different game phases
+
+**Output:** Optimal (feature_weights, relevancy_threshold)
+**Time Budget:** 10-12 hours on A100
+
+---
+
+### CATEGORY 6: Blending Strategy Parameters (DEPENDS ON CATEGORY 5)
+Controls how RAG policy/value is blended with current MCTS results.
+
+**Parameters:**
+- `blend_alpha`: Weight for RAG policy vs. current policy
+- `blend_beta`: Weight for RAG value vs. current value
+- `blend_strategy`: Function type (linear, adaptive, confidence-weighted)
+
+**Tuning Strategy:**
+1. **Method:** Coarse grid search (time-constrained)
+2. **Pre-requisite:** Only applies when relevancy_threshold is met
+3. **Search Space (REDUCED):**
+   - blend_alpha: [0.3, 0.5, 0.7] (3 values, RAG policy weight)
+   - blend_beta: [0.3, 0.5, 0.7] (3 values, RAG value weight)
+   - Total combinations: 9
+4. **Strategy Options (TEST ONE INITIALLY):**
+   - Start with Linear: fixed α and β (simplest)
+   - If time permits: test Confidence-weighted
+   - Skip: Visit-count weighted (save for future work)
+5. **Evaluation Metrics:**
+   - Move quality (match rate with deeper search)
+   - Win rate in actual games
+   - Stability across game phases
+6. **Validation (REDUCED):**
+   - 75-100 games per configuration
+   - Parallel testing on A100
+   - Focus on positions where RAG is actually used
+
+**Output:** Optimal (blend_alpha, blend_beta, blend_strategy)
+**Time Budget:** 8-10 hours on A100
+
+---
+
+### CATEGORY 7: Forced Exploration Parameters (INDEPENDENT)
+Controls behavior when relevancy is low but RAG entry exists.
+
+**Parameters:**
+- `forced_exploration_strategy`: How to incorporate RAG moves (BFS vs. DFS priority)
+- `num_forced_moves`: How many top moves from RAG to force exploration
+
+**Tuning Strategy:**
+1. **Method:** Quick comparative testing
+2. **Strategy Options (REDUCED):**
+   - Early exploration: Add RAG moves to front of search queue
+   - Proportional: Give RAG moves bonus exploration probability
+   - Skip: Late exploration (likely suboptimal)
+3. **Search Space for num_forced_moves:** [1, 2] (2 values, skip 3)
+4. **Evaluation Metrics:**
+   - Search tree efficiency
+   - Win rate vs. baseline
+   - Computation time impact
+5. **Validation (REDUCED):**
+   - 50 games per strategy combination
+   - Test on positions with low relevancy but existing RAG entries
+   - Compare against no forced exploration baseline
+
+**Output:** Optimal (forced_exploration_strategy, num_forced_moves)
+**Time Budget:** 4-5 hours on A100 (parallel with Category 6)
+
+---
+
+### CATEGORY 8: Nearest Neighbor Search Parameters (INDEPENDENT)
+Controls the ANN search in the RAG database.
+
+**Parameters:**
+- `k_neighbors`: Number of nearest neighbors to retrieve (mentioned as 1-NN)
+- `distance_metric`: Similarity metric (cosine, euclidean, etc.)
+- `index_type`: ANN algorithm (HNSW, IVF, etc.)
+
+**Tuning Strategy:**
+1. **Method:** Synthetic benchmarking (fast, no game playing needed)
+2. **Search Space for k_neighbors:** [1, 3] (2 values, start with 1-NN)
+   - Start with 1-NN as specified
+   - Test if k=3 helps (unlikely but quick to test)
+3. **Distance Metrics (REDUCED):**
+   - Cosine similarity (recommended for normalized vectors) - TEST THIS
+4. **Evaluation Metrics:**
+   - Retrieval speed (ms per query)
+   - Retrieval accuracy (true positive rate)
+   - Memory usage
+5. **Index Tuning:**
+   - Test different index parameters (e.g., HNSW: M, efConstruction)
+4. **Evaluation Metrics:**
+   - Retrieval speed (ms per query) - CRITICAL ON A100
+   - Retrieval accuracy (true positive rate)
+   - GPU memory usage
+5. **Index Tuning (SIMPLIFIED):**
+   - Use FAISS library (GPU-accelerated on A100)
+   - Test HNSW index with default parameters first
+   - If time permits, tune one parameter (e.g., efSearch)
+6. **Validation (SYNTHETIC):**
+   - Benchmark on synthetic position database (10K-100K entries)
+   - No game playing required - pure performance test
+   - Can complete in 2-3 hours
+
+**Output:** Optimal (k_neighbors, distance_metric, index_config)
+**Time Budget:** 4-6 hours on A100 (parallel with Phase 1)
+
+---
+
+## TUNING ORDER AND DEPENDENCIES
+
+**Hardware:** NVIDIA A100 GPU (80GB VRAM, high throughput for parallel game simulations)
+**Time Constraint:** 4 days (96 hours total)
+**Strategy:** Aggressive parallelization and reduced validation games per configuration
+
+### Phase 1: Core Uncertainty Detection (Day 1: 0-12 hours)
+**Substep 1a: Uncertainty Function Tuning (4-8 hours)**
+- **Tune Category 1** (w1, w2, phase_function) - REQUIRED FIRST
+  - Most critical parameters
+  - Uses supervised learning on ground truth database (no games needed)
+  - Estimated time: 4-8 hours
+  - **A100 Optimization:** Grid search over 35 configurations (7 w1 × 5 phase)
+  - Optimize for correlation with actual model errors
+  - Output: Optimal uncertainty function parameters
+
+**Substep 1b: Relevance Weight Tuning (2-4 hours)**
+- **Tune Category 1b** (relevance comparison weights) - MUST BE DONE BEFORE 1c
+  - Determines similarity scoring between positions
+  - Uses supervised learning on labeled position pairs
+  - Estimated time: 2-4 hours
+  - **A100 Optimization:** Test ~20-30 weight combinations on labeled data
+  - Evaluate with ROC-AUC, Precision@90%, Recall@90%
+  - Output: Optimal relevance weights for similarity scoring
+
+**Substep 1c: Uncertainty Threshold Tuning (8-10 hours)**
+- **Tune Category 2** (uncertainty_threshold) - DEPENDS ON 1a AND 1b
+  - When to query RAG database during gameplay
+  - Requires actual game execution with RAG augmentation
+  - Estimated time: 8-10 hours
+  - **A100 Optimization:** Test 5 threshold values (5%, 10%, 15%, 20%, 25%)
+  - 100 games per threshold, 32-64 games in parallel
+  - Uses READ-ONLY static RAG database (no storage during tuning)
+  - Output: Optimal uncertainty threshold for RAG queries
+
+**Phase 1 Total Time:** 14-22 hours (optimistic: 14h, conservative: 22h)
+
+---
+
+### Phase 2: Storage and Retrieval Setup (Day 1-2: 12-24 hours)
+2. **Tune Category 8** (ANN parameters) - INDEPENDENT (can run in parallel)
+   - Can be done in parallel with Phase 1
+   - Estimated time: 4-6 hours
+   - **A100 Optimization:** Benchmark on synthetic data, minimal game testing
+
+---
+
+### Phase 3: Search Quality (Day 2: 24-36 hours)
+4. **Tune Category 3** (deep MCTS parameters) - INDEPENDENT
+   - Affects quality of stored positions
+   - Estimated time: 8-10 hours
+   - **A100 Optimization:** Test 4-5 depth values, 50-75 games each
+5. **Tune Category 4** (recursion control) - INDEPENDENT (PARALLEL with Category 3)
+   - Safety parameter
+   - Estimated time: 3-4 hours
+   - **A100 Optimization:** Quick tests with 30-50 games per value
+
+---
+
+### Phase 4: Usage Optimization (Day 3: 36-60 hours)
+6. **Tune Category 6** (blending strategy) - DEPENDS ON PHASE 1
+   - Fine-tunes how RAG is used (blend factors, interpolation)
+   - Estimated time: 8-10 hours
+   - **A100 Optimization:** 5x5 grid, 75-100 games per configuration
+7. **Tune Category 7** (forced exploration) - INDEPENDENT (PARALLEL with Category 6)
+   - Fallback strategy
+   - Estimated time: 4-5 hours
+   - **A100 Optimization:** 3 strategies, 50 games each
+
+---
+
+### Phase 5: Final Optimization (Day 4: 60-96 hours)
+9. **Joint Fine-tuning** - DEPENDS ON ALL
+   - Small adjustments to all parameters together
+   - Estimated time: 12-16 hours
+   - **A100 Optimization:** Test 3-5 final configurations, 200-300 games each
+10. **Validation & Documentation** 
+   - Final validation run against baseline
+   - Estimated time: 6-8 hours
+   - 500+ games for statistical significance
+
+**Total Estimated Time:** 4 days (96 hours) with aggressive parallelization
+
+**A100-Specific Optimizations:**
+- Batch size: 32-64 games running simultaneously
+- Mixed precision training for faster inference
+- CPU preprocessing pipeline to keep GPU saturated
+- RAM caching of common positions (A100 has 80GB VRAM)
+- Parallel hyperparameter search using Ray Tune or similar
+- Reduced game validation counts (100-200 vs 500+ per config)
+
+---
+
+## EVALUATION FRAMEWORK
+
+### Primary Metrics
+1. **Win Rate**: Against baseline KataGo (target: +3-5% given time constraints)
+2. **ELO Gain**: Estimated ELO improvement
+3. **Computation Time**: Average time per move
+4. **Memory Usage**: Database size and GPU VRAM consumption (80GB A100 limit)
+5. **Throughput**: Games per hour (target: 1000+ on A100 with parallelization)
+
+### Secondary Metrics
+1. **Cache Hit Rate**: % of uncertain positions found in RAG
+2. **False Positive Rate**: % of retrieved positions that don't help
+3. **Coverage**: % of game types/positions represented in RAG
+4. **Scalability**: Performance as database grows
+
+### Testing Protocol (4-DAY OPTIMIZED)
+1. **Validation Set**: Use 20% of games for validation (cached from training runs)
+2. **Test Opponents**: Primarily baseline KataGo (fast, consistent)
+3. **Game Diversity**: Focus on 19x19 standard games initially
+4. **Reproducibility**: Fix random seeds for comparison
+5. **Early Stopping**: Abort clearly suboptimal configs after 50-100 games
+6. **Parallel Testing**: Run multiple configurations simultaneously on A100
+
+---
+
+## MONITORING AND ITERATION
+
+### Continuous Monitoring (AUTOMATED)
+1. Real-time dashboards tracking win rate, throughput, GPU utilization
+2. Auto-logging of all parameter values with W&B or TensorBoard
+3. Automated checkpointing every 2-4 hours
+4. Git-based version control for configurations
+
+### Iteration Strategy (TIME-CONSTRAINED)
+1. Start with conservative baseline parameters (see Quick Start section)
+2. Use coarse-to-fine approach: broad search first, then refine
+3. Monitor for overfitting via validation set (abort if validation diverges)
+4. Prioritize categories by impact: Phase 1 > Phase 4 > Phase 3 > others
+
+### Red Flags to Watch (CRITICAL ON 4-DAY TIMELINE)
+1. **GPU Underutilization**: Should be >90% utilized during game playing
+2. **Database growing too fast**: Exceeding 20GB/day (storage_threshold too low)
+3. **Retrieval latency**: >10ms per query (need index optimization)
+4. **Win rate plateau/decrease**: Sign of overfitting or poor parameters
+5. **OOM errors**: Batch size too large or embeddings exceeding 80GB VRAM
+6. **Slow game generation**: <500 games/hour indicates bottleneck
+
+---
+
+## 4-DAY EXECUTION CHECKLIST
+
+### Pre-Tuning Setup (Hour 0)
+- [ ] Verify A100 GPU is accessible and CUDA configured
+- [ ] Install FAISS-GPU, Ray Tune, W&B for monitoring
+- [ ] Set up parallel game infrastructure (32-64 workers)
+- [ ] Implement automated logging and checkpointing
+- [ ] Test baseline KataGo performance (establish benchmark)
+
+### Day 1 Milestones
+- [ ] Complete Category 1 tuning (w1, w2, phase)
+- [ ] Have initial RAG database populated with uncertain positions
+- [ ] Verify storage pipeline is working
+
+### Day 2 Milestones  
+- [ ] Complete Categories 2, 3, 4, 8
+- [ ] Database should be at stable growth rate
+- [ ] ANN index performance validated
+
+### Day 3 Milestones
+- [ ] Complete Categories 5, 6, 7
+- [ ] Full RAG retrieval and blending pipeline operational
+- [ ] Initial end-to-end tests showing improvement
+
+### Day 4 Milestones
+- [ ] Joint fine-tuning complete
+- [ ] 500+ validation games against baseline
+- [ ] Documentation of final parameters
+- [ ] Performance analysis and future work recommendations
+
+---
+
+## PARAMETER SUMMARY TABLE
+
+| Parameter | Category | Tuning Order | Dependencies | Expected Range |
+|-----------|----------|--------------|--------------|----------------|
+| w1, w2 | 1 | 1st | None | [0.1-0.9], sum=1 |
+| phase_function_type | 1 | 1st | None | linear, exponential, piecewise |
+| phase_coefficients | 1 | 1st | None | Function-dependent |
+| storage_threshold | 2 | 2nd | Category 1 | Percentile-based |
+| deep_mcts_max_depth | 3 | 4th | None | [500-10000] visits |
+| convergence_threshold | 3 | 4th | None | [0.01-0.1] |
+| recursion_depth_N | 4 | 5th | None | [1-10] |
+| relevancy_threshold | 5 | 6th | None | [0.70-0.95] |
+| feature_weights | 5 | 6th | None | Learned |
+| blend_alpha | 6 | 7th | Category 5 | [0.1-0.9] |
+| blend_beta | 6 | 7th | Category 5 | [0.1-0.9] |
+| forced_exploration_strategy | 7 | 8th | None | Categorical |
+| num_forced_moves | 7 | 8th | None | [1-3] |
+| k_neighbors | 8 | 3rd | None | [1-5] |
+| distance_metric | 8 | 3rd | None | Categorical |
+
+---
+
+## IMPLEMENTATION NOTES
+
+### Quick Start Recommendations (Day 1, Hour 0)
+Start tuning from these baseline values:
+- w1=0.5, w2=0.5 (equal weighting)
+- phase_function_type: 'linear'
+- phase_coefficients: [0.0, 1.0] (constant phase multiplier of 1.0)
+- storage_threshold: top 10% uncertainty
+- deep_mcts_max_depth: 2000 visits
+- convergence_threshold: 0.02
+- recursion_depth_N: 2
+- relevancy_threshold: 0.85
+- blend_alpha: 0.5, blend_beta: 0.5
+- forced_exploration: early exploration
+- num_forced_moves: 2
+- k_neighbors: 1
+- distance_metric: cosine similarity
+
+### A100-Specific Configuration
+**Batch Settings:**
+- Parallel games: 32-64 (adjust based on VRAM usage)
+- Mixed precision: FP16 for inference (2x speedup)
+- CUDA streams: 4-8 for async operations
+
+**Memory Management:**
+- Reserve 60GB for model + MCTS trees
+- Reserve 15GB for RAG embeddings/index
+- Reserve 5GB for system overhead
+- Monitor with `nvidia-smi` every 30 minutes
+
+**Performance Targets:**
+- Games/hour: 1000-2000 (with 64 parallel workers)
+- Retrieval latency: <5ms per query
+- GPU utilization: >90% during game playing
+- Database growth: ~5-10GB/day
+- k_neighbors: 1
+- distance_metric: cosine similarity
+
+### Automated Tuning Tools (REQUIRED FOR 4-DAY TIMELINE)
+Essential infrastructure:
+1. **Ray Tune**: Parallel hyperparameter search with ASHA early stopping
+2. **Weights & Biases (W&B)**: Real-time monitoring and comparison
+3. **FAISS-GPU**: Fast ANN search on A100
+4. **Git + DVC**: Version control for parameters and checkpoints
+
+Recommended setup commands:
+```bash
+pip install ray[tune] wandb faiss-gpu tensorboard
+pip install optuna  # Optional: alternative to Ray Tune
+```
+
+---
+
+## CONCLUSION
+
+This tuning plan provides a structured 4-day approach to optimizing the RAG-enhanced AlphaGo system on an NVIDIA A100 GPU.
+
+**Key Strategies for 4-Day Constraint:**
+- **Parallelization**: Run 32-64 games simultaneously
+- **Reduced search spaces**: 3-4 values per parameter instead of 5-10
+- **Early stopping**: Abort poor configurations after 50-100 games
+- **Synthetic benchmarks**: Use cached data when possible (Category 5, 8)
+- **Coarse-to-fine**: Start broad, refine only promising regions
+
+**Critical Success Factors:**
+- GPU must be >90% utilized (otherwise pipeline bottleneck)
+- Automate everything (no manual intervention)
+- Monitor continuously (catch issues early)
+- Prioritize Phase 1 (foundation for everything else)
+
+**Parameter Dependencies:**
+- **Joint tuning required**: Category 1 (uncertainty detection) and Category 5 (relevancy comparison)
+- **Sequential dependencies**: Categories 2→1, 6→5
+- **Independent tuning**: Categories 3, 4, 7, 8 (can parallelize)
+
+**Expected Outcomes:**
+- Win rate improvement: +3-5% over baseline KataGo
+- Database size: 20-40GB after 4 days
+- Games analyzed: 15,000-25,000 total
+- ELO gain: +50-150 points (estimated)
+
+**If Time Runs Short:**
+- Priority 1: Complete Phase 1 (Categories 1, 2) - ESSENTIAL
+- Priority 2: Complete Phase 4 (Categories 5, 6) - HIGH IMPACT  
+- Priority 3: Complete Phase 3 (Categories 3, 4) - QUALITY
+- Can skip: Category 7 (forced exploration) - use default early exploration
+- Can skip: Fine-tuning Phase 5 - use best parameters from individual tuning
+
+By following this phased approach, you can systematically improve the system while managing computational costs and avoiding parameter interactions that could confound results.
+
+---
+
+## QUICK REFERENCE: 4-DAY SCHEDULE
+
+| Time | Phase | Categories | Key Actions | Success Criteria |
+|------|-------|------------|-------------|------------------|
+| **Day 1 (0-24h)** | Phase 1 | Cat 1, 2, 8 | Tune uncertainty detection weights; establish storage threshold; test ANN | w1, w2, phase_func determined; RAG populated |
+| **Day 2 (24-48h)** | Phase 2-3 | Cat 3, 4 | Tune deep MCTS depth; set recursion limits | Deep search converges; safe recursion |
+| **Day 3 (48-72h)** | Phase 4 | Cat 5, 6, 7 | Learn relevancy weights; optimize blending; test forced exploration | RAG retrieval works; blending improves play |
+| **Day 4 (72-96h)** | Phase 5 | Joint | Fine-tune all params together; run validation; document | +3-5% win rate; final configs saved |
+
+**Critical Path:** Phase 1 → Phase 2 → Phase 4 → Phase 5
+**Parallelizable:** Categories 3, 4, 7, 8 can run alongside sequential phases

@@ -1,0 +1,19 @@
+# Requirements for Phase 1 Tuning Scripts
+# Install with: pip install -r requirements_tuning.txt
+
+# Core dependencies
+numpy>=1.21.0
+matplotlib>=3.4.0
+psutil>=5.8.0
+
+# Optional but highly recommended for 4-day timeline
+ray[tune]>=2.0.0  # Parallel hyperparameter search with early stopping
+wandb>=0.12.0     # Real-time monitoring and experiment tracking
+faiss-gpu>=1.7.0  # GPU-accelerated ANN search (for Phase 1b and later)
+
+# Optional alternatives
+optuna>=3.0.0     # Alternative to Ray Tune for hyperparameter optimization
+
+# For integration with KataGo (add your specific versions)
+# torch>=1.10.0
+# tensorflow>=2.8.0
