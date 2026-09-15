@@ -1,8 +1,10 @@
-# DataGo: Retrieval-Augmented Recursive Search that Surpasses KataGo
+# DataGo: Retrieval-Augmented Recursive Search for Go
 
 **Team:** Benjamin Huh, Jason Peng, Taka Khoo, Olir Eswaramoorthy, David Roos, Victor Lun Pun
 
-**Note:** This project is actively in development. Current results demonstrate promising improvements over KataGo, but the architecture continues to be refined and expanded.
+> **Research status:** active prototype. The results below are promising
+> small-sample evaluations of a specific configuration; they do not establish
+> general superiority over KataGo.
 
 ---
 
@@ -16,22 +18,24 @@ The complete research paper provides comprehensive mathematical foundations, exp
 
 ---
 
-## Executive Summary: We Already Beat KataGo
+## Experimental summary
 
-**DataGo has achieved measurable superiority over KataGo with minimal tuning:**
+In the included match harnesses and fixed experimental settings, DataGo recorded:
 
-- **9-0-1 record** (90% win rate) in synthetic stress tests
-- **8-0-2 record** (80% win rate) against real KataGo outputs with only threshold retuning
-- **Only 5.1% activation rate** needed—proving that selective, high-value RAG interventions suffice
-- **6.6 cache hits per query**—demonstrating effective reuse of past 2,000-visit analyses
+- **9-0-1** in the synthetic stress-test suite
+- **8-0-2** against sampled KataGo outputs after threshold retuning
+- **5.1% retrieval activation rate** in the reported configuration
+- **6.6 cache hits per query** for stored 2,000-visit analyses
 
-**What makes this impressive:** We achieved these results with:
-- **No new network training**—using only KataGo's public networks
-- **Minimal hyperparameter tuning**—just one threshold adjustment (0.37 → 0.15)
-- **Simple forced exploration**—not even full policy blending yet
-- **Self-play generated memory**—no pro-game ingestion
+The prototype uses:
+- KataGo's public networks without additional network training
+- one reported gating-threshold adjustment (`0.37` → `0.15`)
+- forced exploration rather than full policy blending
+- a memory generated from self-play rather than professional games
 
-**This is just the beginning.** With 8 planned tuning phases and full RAG implementation, we aim to surpass AlphaGo and other leading models, targeting NeurIPS or ICLR submission.
+The next milestone is a larger, seeded evaluation with matched compute budgets,
+confidence intervals, ablations, and held-out positions. Those controls are
+required before making broader performance claims.
 
 ---
 
@@ -71,7 +75,9 @@ Unlike traditional opening books or endgame tablebases, DataGo's memory stores *
 
 **Can a KataGo-based engine that caches high-quality analyses and selectively revisits them via ANN retrieval systematically outperform pure KataGo at fixed base visits?**
 
-**Answer: Yes.** Our experiments demonstrate that DataGo achieves measurable improvements in win rate while activating retrieval on only 5.1% of moves.
+**Preliminary answer:** the current experiments show measurable improvement in
+the tested setting while activating retrieval on 5.1% of moves. Broader claims
+require the larger controlled evaluation described above.
 
 ---
 
