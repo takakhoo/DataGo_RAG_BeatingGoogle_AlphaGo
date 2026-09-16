@@ -7,6 +7,7 @@ Simple test script to verify the custom GTP controller works with KataGo.
 
 import sys
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Tuple, List
@@ -102,7 +103,12 @@ def test_katago_gtp():
     # Check files exist
     for name, path in [("Executable", katago_exe), ("Model", model_path), ("Config", config_path)]:
         if not Path(path).exists():
-            logger.error(f"{name} not found at: {path}")
+            message = f"{name} not found at: {path}"
+            if os.getenv("PYTEST_CURRENT_TEST"):
+                import pytest
+
+                pytest.skip(message)
+            logger.error(message)
             return False
     
     logger.info("All files found!")

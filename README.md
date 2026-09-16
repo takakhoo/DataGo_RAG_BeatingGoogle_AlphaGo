@@ -8,13 +8,16 @@
 
 ---
 
-## Complete Research Documents
+## Research artifacts
 
 **[View Full Research Paper (PDF)](DATAGO_PAPER.pdf)**  
 **[View Presentation Slides (PDF)](DataGo_Presentation.pdf)**  
 **[View Original Project Plan (PDF)](Project_Plan.pdf)**
 
-The complete research paper provides comprehensive mathematical foundations, experimental methodology, and detailed analysis. The presentation offers a visual walkthrough of the architecture and results. The project plan outlines the original vision and roadmap.
+The paper contains the mathematical background, experimental method, and
+recorded analysis. The presentation provides a visual walkthrough, while the
+project plan preserves the original proposal and should not be read as a record
+of completed work.
 
 ---
 
@@ -57,7 +60,11 @@ required before making broader performance claims.
 
 ### The Challenge
 
-Monte Carlo tree search (MCTS) with deep neural priors underpins state-of-the-art Go engines such as KataGo. Yet current systems exhibit a fundamental inefficiency: **each position is analyzed from scratch**, even if it or its symmetric variants have appeared in earlier games. Expensive 10,000-visit analyses are discarded after use, never to be reused.
+Monte Carlo tree search (MCTS) with deep neural priors underpins strong Go
+engines such as KataGo. In the baseline configuration used here, analysis is
+not persisted across matches, so earlier searches are unavailable when the
+same or a symmetric position appears again. DataGo tests whether selectively
+reusing those computations can improve decisions under a controlled harness.
 
 ### Our Solution: Retrieval-Augmented Generation for Go
 
@@ -267,7 +274,7 @@ with $\beta\in[0,1]$ controlling the strength of retrieval. In current experimen
 | **C: Real Untuned** | 0.370 | Real NN | 0 | 0 | 0-10-0 | 0% |
 | **D: Real Tuned** | 0.150 | Real NN | 23 | 328 | **8-0-2** | **80%** |
 
-### Key Results: We Beat KataGo
+### Recorded match results
 
 #### Experiment B: Synthetic Stress Test (9-0-1)
 
@@ -292,7 +299,9 @@ with $\beta\in[0,1]$ controlling the strength of retrieval. In current experimen
 | Average uncertainty | $\bar{\mathcal{U}} = 0.377$ |
 | Cache hits | 135 (45.6% hit rate) |
 
-**Interpretation:** When allowed to fire frequently, the recursive RAG pipeline drives an almost 2× effective visit advantage and achieves a 90% win rate in a synthetic environment.
+**Interpretation:** In this ten-game synthetic stress test, frequent activation
+produced an almost 2× effective visit advantage and a 9-0-1 record. This is a
+pipeline stress test, not evidence of general playing-strength superiority.
 
 #### Experiment D: Real KataGo with Tuned Threshold (8-0-2)
 
@@ -315,10 +324,13 @@ with $\beta\in[0,1]$ controlling the strength of retrieval. In current experimen
 | Unique positions stored | 1,070 |
 | Total contexts | 1,211 |
 | Average uncertainty | $\bar{\mathcal{U}} = 0.080$ |
-| **Cache hits** | **152 (6.6 hits per query!)** |
+| **Cache hits** | **152 (6.6 hits per query)** |
 | Effective visits per move | $\approx 2{,}446$ |
 
-**Key Insight:** Despite a much lower activation rate (5.1% vs 63.2%), DataGo still achieves an 80% win rate. This demonstrates that **rare but high-value activations suffice to improve win rate** when properly calibrated.
+**Interpretation:** The tuned ten-game run recorded an 8-0-2 result with a 5.1%
+activation rate. The result motivates a larger seeded evaluation, but it does
+not isolate retrieval from the additional search budget or establish a stable
+win-rate estimate.
 
 ### Threshold Sensitivity Analysis
 
@@ -468,9 +480,11 @@ python run_datago_recursive_match.py \
 
 ---
 
-## Future Work: 8-Phase Tuning Roadmap
+## Evaluation Roadmap
 
-**Current Status:** We have achieved 80% win rate against KataGo with minimal tuning (Phase 1 complete). **This project is actively in development** and the architecture will continue to be built and refined until NeurIPS or ICLR submission.
+The recorded ten-game runs are promising exploratory results, not a statistically
+conclusive strength estimate. The next evaluation phase is designed to separate
+the contribution of retrieval from the additional search budget.
 
 ### Phase 1: Uncertainty Gate Calibration (COMPLETE)
 
@@ -484,7 +498,7 @@ python run_datago_recursive_match.py \
 - Evaluated recursion depths: $D_{\max} \in \{1, 2, 3, 5\}$
 - **Result:** Optimal config: $D=10{,}000$, $D_{\max}=3$ (for stress testing)
 
-### Phase 3: Policy Blending Implementation (IN PROGRESS)
+### Policy blending
 
 **Goal:** Implement full policy blending in MCTS
 
@@ -494,9 +508,10 @@ $$
 
 **Current Status:** Blending utilities implemented but not yet integrated into competitive matches. Currently using forced exploration.
 
-**Expected Impact:** Further shift in Nash equilibrium, potentially increasing win rate to 85-90%.
+The blending utilities are implemented but have not yet been integrated into the
+reported competitive matches.
 
-### Phase 4: Pro-Game Ingestion
+### Pro-game ingestion
 
 **Goal:** Pre-seed ANN with thousands of professional game positions
 
@@ -504,9 +519,9 @@ $$
 - Ingest curated pro-game databases
 - **Target:** $\mathbb{E}[p_{\text{hit}}] \rightarrow 0.5$ (50% cache hit rate)
 
-**Expected Impact:** Cross-game generalization, improved opening play, higher cache efficiency.
+This experiment will test cross-game generalization and opening-play coverage.
 
-### Phase 5: Asymmetric Visit Testing
+### Compute-matched testing
 
 **Goal:** Test whether RAG compensates for reduced base visits
 
@@ -515,9 +530,10 @@ $$
 - DataGo(600 visits + RAG) vs KataGo(800 visits)
 - Measure $\Delta$ Elo and whether retrieval compensates
 
-**Expected Impact:** Prove that RAG provides value beyond simple visit scaling.
+This is the key ablation for determining whether retrieval adds value beyond
+simple visit scaling.
 
-### Phase 6: Threshold Sweep and Optimization
+### Threshold sweep
 
 **Goal:** Map threshold space to performance surface
 
@@ -527,9 +543,10 @@ $$
 
 **Sweep Range:** $\theta \in [0.11, 0.18]$ with fine-grained steps
 
-**Expected Impact:** Find optimal operating point balancing win rate, activation, and compute.
+The output will be an operating curve over win rate, activation frequency, and
+compute cost.
 
-### Phase 7: Advanced Relevance Scoring
+### Learned relevance scoring
 
 **Goal:** Improve relevance metric with learned weights
 
@@ -537,19 +554,13 @@ $$
 - Future: Learn optimal weights via regression on policy/value discrepancies
 - Add temporal decay and context quality metrics
 
-**Expected Impact:** Higher precision in memory retrieval, better cache utilization.
+This will compare learned scoring against the current fixed-weight baseline.
 
-### Phase 8: AlphaGo-Level Competition
+### Larger-scale evaluation
 
-**Goal:** Target submission to NeurIPS or ICLR
-
-**Milestones:**
-- Achieve >90% win rate against KataGo
-- Demonstrate superiority in Elo rating
-- Compare against AlphaGo Zero and other leading models
-- Publish comprehensive ablation studies
-
-**Timeline:** Architecture development continues until conference submission deadline.
+Run 100+ games across multiple KataGo networks, publish confidence intervals,
+report wall-clock and visit-normalized comparisons, and include ablations for
+retrieval, gating, blending, and memory source.
 
 ---
 
@@ -590,29 +601,13 @@ DataGo_RAGtoWin_vs_Google/
 
 ---
 
-## Key Achievements
+## Recorded Results
 
-### Validated Accomplishments
-
-1. **Beat KataGo:** 9-0-1 (synthetic) and 8-0-2 (real tuned) records
-2. **Efficient Activation:** Only 5.1% activation rate needed for 80% win rate
-3. **High Cache Efficiency:** 6.6 hits per query, reusing 2,000-visit analyses
-4. **Recursive Deep Search:** 95.7% recursion rate, building deep analysis trees
-5. **Reproducible Pipeline:** All experiments logged and reproducible
-
-### What Makes This Impressive
-
-- **No new network training**—using only public KataGo networks
-- **Minimal tuning**—just one threshold adjustment
-- **Simple implementation**—forced exploration, not even full blending
-- **Self-play memory**—no external pro-game data yet
-
-### Future Potential
-
-With 8-phase tuning complete, we expect:
-- **>90% win rate** against KataGo
-- **AlphaGo-level performance** with full RAG integration
-- **Conference submission** to NeurIPS or ICLR
+The repository includes logs for 9-0-1 synthetic and 8-0-2 tuned real-network
+runs. In the latter configuration, the gate activated on 5.1% of positions and
+retrieval returned an average of 6.6 hits per query. These results establish that
+the pipeline executes and motivate a larger compute-matched study; they do not,
+by themselves, establish general superiority over KataGo.
 
 ---
 
@@ -622,13 +617,16 @@ Let $\pi_{\text{DataGo}}$ and $\pi_{\text{KataGo}}$ denote the strategies induce
 
 Let $\text{Score}(s_T)$ be the final score under Chinese rules.
 
-Our experiments approximate:
+The experiments test the following directional hypothesis:
 
 $$
 \max_{\pi_{\text{DataGo}}}\min_{\pi_{\text{KataGo}}} \mathbb{E}[\text{Score}(s_T)] - \max_{\pi_{\text{KataGo}}}\min_{\pi_{\text{KataGo}}} \mathbb{E}[\text{Score}(s_T)] > 0
 $$
 
-by showing that DataGo's win rate vs. a strong KataGo baseline is 0.9 (synthetic) and 0.8 (real tuned), with identical networks and identical 800-visit shallow budgets.
+The recorded runs produced win rates of 0.9 (synthetic) and 0.8 (real tuned),
+using identical networks and 800-visit shallow budgets. Because DataGo performs
+additional deep searches on selected positions, these are not compute-matched
+comparisons and should not be interpreted as proof of the inequality above.
 
 **The extra strength derives from targeted deep searches and reuse of stored 2k-visit analyses**, effectively increasing the visit count on hard positions without changing the base configuration.
 
@@ -664,7 +662,9 @@ The `ragflow_repo` infrastructure is ready to ingest SGFs, but experiments repor
 
 ## Broader Impacts
 
-DataGo demonstrates that retrieval-augmented, log-grounded search can substantially strengthen an open-source Go engine **without training new networks**, merely by reusing past computations.
+DataGo explores whether retrieval-augmented, log-grounded search can improve an
+open-source Go engine without training a new network, by reusing earlier search
+computations.
 
 **Positive impacts:**
 - Resource-limited labs can improve strong baselines via clever search and memory
@@ -715,5 +715,5 @@ For questions, issues, or collaborations, please open an issue on GitHub or cont
 
 ---
 
-**Last Updated:** November 2025  
-**Status:** Active development in progress. Architecture continues to be refined and expanded, targeting NeurIPS or ICLR submission.
+**Status:** Active research prototype. The recorded results require broader,
+compute-matched evaluation before making strength claims.
