@@ -66,7 +66,7 @@ not persisted across matches, so earlier searches are unavailable when the
 same or a symmetric position appears again. DataGo tests whether selectively
 reusing those computations can improve decisions under a controlled harness.
 
-### Our Solution: Retrieval-Augmented Generation for Go
+### Method: Retrieval-Augmented Search for Go
 
 We introduce **DataGo**, a retrieval-augmented Go engine that wraps unmodified KataGo networks with:
 
@@ -74,7 +74,7 @@ We introduce **DataGo**, a retrieval-augmented Go engine that wraps unmodified K
 2. **Multi-context approximate nearest-neighbor (ANN) memory** keyed by symmetry-invariant hashes
 3. **Recursive deep-search module** that stores 2,000–10,000-visit analyses for re-use
 
-### Key Innovation
+### Stored-search representation
 
 Unlike traditional opening books or endgame tablebases, DataGo's memory stores **entire deep-search trees** including child-node value distributions, policies, and auxiliary metrics. When a similar position appears, DataGo can instantly retrieve a cached 10k-visit analysis instead of recomputing from scratch.
 
@@ -422,8 +422,8 @@ Raising $D$ from 1,000 to 10,000 reduces policy error by nearly **3×** but mult
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/takakhoo/DataGo_RAG_BeatingGoogle_AlphaGo.git
-cd DataGo_RAG_BeatingGoogle_AlphaGo
+git clone https://github.com/takakhoo/datago-retrieval-search.git
+cd datago-retrieval-search
 ```
 
 ### Step 2: Install Python Dependencies
@@ -477,6 +477,19 @@ python run_datago_recursive_match.py \
     --games 1 \
     --move-cap 50
 ```
+
+### Verification
+
+The dependency-light test suite was run on September 16, 2026:
+
+```bash
+python -m pytest -q
+```
+
+Result: one deterministic unit test passed and the KataGo integration test
+skipped with an explicit message because no local KataGo binary/model was
+configured. The full match command above is the integration boundary and
+requires the declared external engine assets.
 
 ---
 
@@ -638,7 +651,9 @@ comparisons and should not be interpreted as proof of the inequality above.
 
 Although both engines use 800 shallow visits per move, DataGo uses additional deep visits on activated positions. Our experiments evaluate "DataGo at ~2.4k effective visits" vs. "KataGo at 800 visits."
 
-**Future work:** Run asymmetric matches (e.g., DataGo at 400 base visits + RAG vs. KataGo at 800) to measure whether retrieval compensates for reduced search.
+**Future work:** Run asymmetric matches (for example, DataGo at 400 base visits
+plus retrieval versus KataGo at 800) to measure whether retrieval compensates
+for reduced search.
 
 ### Incomplete Blending Implementation
 
@@ -660,37 +675,16 @@ The `ragflow_repo` infrastructure is ready to ingest SGFs, but experiments repor
 
 ---
 
-## Broader Impacts
-
-DataGo explores whether retrieval-augmented, log-grounded search can improve an
-open-source Go engine without training a new network, by reusing earlier search
-computations.
-
-**Positive impacts:**
-- Resource-limited labs can improve strong baselines via clever search and memory
-- Techniques transfer to other combinatorial search domains (chess, shogi, planning)
-- Open-source contribution to Go AI research
-
-**Considerations:**
-- Stronger Go engines may widen the gap between humans and machines
-- Could enable more persuasive automated analysis tools
-- However, these risks are mild compared to generative language or vision models
-
-We rely only on public KataGo networks and do not train new models. Our code and logs are released under standard open-source licenses to support reproducibility.
-
----
-
 ## Citation
 
 If you use this work in your research, please cite:
 
 ```bibtex
-@article{datago2025,
-  title={DataGo: Retrieval-Augmented Recursive Search that Surpasses KataGo with Log-Grounded Analysis},
+@misc{datago2025,
+  title={DataGo: Retrieval-Augmented Recursive Search for Go},
   author={Huh, Benjamin and Peng, Jason and Khoo, Taka and Eswaramoorthy, Olir and Roos, David and Pun, Victor Lun},
-  journal={arXiv preprint},
   year={2025},
-  note={Dartmouth College}
+  note={Dartmouth College research artifact}
 }
 ```
 
