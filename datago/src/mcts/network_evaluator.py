@@ -61,6 +61,7 @@ class KataGoNetworkEvaluator:
             'analysis',
             '-model', self.model_path,
             '-config', self.config_path,
+            '-override-config', 'reportAnalysisWinratesAs=SIDETOMOVE',
         ]
         
         try:
@@ -136,7 +137,9 @@ class KataGoNetworkEvaluator:
         
         # Extract policy and value
         policy_dict = self._extract_policy(response)
-        value = response.get('rootInfo', {}).get('winrate', 0.5)
+        if 'error' in response or 'winrate' not in response.get('rootInfo', {}):
+            raise RuntimeError(f"KataGo did not return a usable evaluation: {response}")
+        value = 2 * float(response['rootInfo']['winrate']) - 1
         
         # Cache result
         if use_cache:
@@ -234,6 +237,7 @@ class KataGoNetworkEvaluator:
         
         # Return uniform policy as fallback
         # (In practice, this should never happen - always call evaluate() first)
-        logger.warning(f"Position {position_hash} not in cache, returning uniform policy")
-        uniform_policy = {"pass": 1.0}
-        return uniform_policy, 0.5
+        raise KeyError(
+            f"Position {position_hash!r} has no evaluation. A hash-only child is not a Go state; "
+            "wire legal state transitions and evaluate each child before using CustomMCTS."
+        )

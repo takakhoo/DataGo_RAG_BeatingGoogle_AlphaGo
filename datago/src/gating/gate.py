@@ -17,20 +17,25 @@ DEFAULTS = {
 
 
 def entropy_of_policy(p: np.ndarray, base: float = math.e) -> float:
-    p = p.astype(float)
-    p = p / (p.sum() + 1e-12)
+    p = np.asarray(p, dtype=float)
+    if p.ndim != 1 or not len(p) or not np.all(np.isfinite(p)) or np.any(p < 0) or not np.any(p > 0):
+        raise ValueError("policy must be nonempty, finite, nonnegative, with positive mass")
+    if not math.isfinite(base) or base <= 0 or base == 1:
+        raise ValueError("entropy base must be positive and not one")
+    p = p / p.max()
+    p = p / p.sum()
     p_pos = p[p > 0]
-    return float(-(p_pos * np.log(p_pos)).sum())
+    return float(-(p_pos * np.log(p_pos)).sum() / math.log(base))
 
 
 def normalized_entropy(p: np.ndarray) -> float:
     # normalize by log(num_legal_moves)
+    H = entropy_of_policy(p)
     L = float(len(p))
     if L <= 1:
         return 0.0
-    H = entropy_of_policy(p)
     H_max = math.log(L)
-    return float(H / (H_max + 1e-12))
+    return float(np.clip(H / H_max, 0, 1))
 
 
 def should_trigger(p: np.ndarray, threshold: float = DEFAULTS["H_trigger"]) -> bool:

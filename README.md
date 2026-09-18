@@ -6,6 +6,52 @@
 > small-sample evaluations of a specific configuration; they do not establish
 > general superiority over KataGo.
 
+## Reproduce the core components on CPU
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-core.txt
+python -m pytest tests -q
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python reproduce_core.py
+```
+
+![Retrieval and adversarial search diagnostics](results/core/diagnostics.png)
+
+[Machine-readable results](results/core/metrics.json): NumPy, FAISS and HNSW
+recover all 128 noisy synthetic queries at gains 0.1, 1 and 10, including after
+saving/reloading. In a known six-state adversarial tree, search learns to reject
+a misleading high-prior trap: the safe action receives 25% of visits at four
+simulations and 93.4% at 256. A hand-specified helpful stored prior reaches 99.2%.
+This is a **component diagnostic, not Go play**; the helpful prior is supplied,
+not learned, and its acquisition cost is not included.
+
+Corrections covered by regression tests:
+
+- Every retrieval backend returns **cosine similarity, higher is better**.
+  HNSW previously returned distance, and FAISS did not normalize queries.
+- Insertions/upserts invalidate built indexes; saving no longer makes new
+  entries invisible. `k` is bounded by the actual database size.
+- Portable JSON storage replaces executable pickle as the default. To migrate
+  a file you created and trust, use `index.load(path, trusted_legacy=True)` then
+  `index.save(path)`. Never enable this for downloaded/untrusted pickle files.
+- MCTS negates child values during selection, handles terminal states,
+  normalizes temperature-zero ties, and avoids small-temperature overflow.
+- Entropy validates probabilities and honors the requested logarithm base.
+
+**Important integration boundary:** `src/bot/datago_bot.py` still identifies
+positions by move count and does not provide legal Go state transitions to the
+custom MCTS. Its child hashes are placeholders, not reconstructed boards.
+Missing evaluations now fail explicitly rather than silently fabricating a
+pass-only policy. The standalone match scripts are a separate path. A complete
+Go benchmark needs board/history/ko-aware state transitions, the exact KataGo
+model/configuration, stored-search provenance and compute-matched matches.
+The historical match figures below were **not reproduced by this diagnostic**.
+
+KataGo values are explicitly requested from the side-to-move perspective and
+converted from `[0,1]` win probabilities to the MCTS `[-1,1]` convention; see
+the [official analysis protocol](https://github.com/lightvector/KataGo/blob/master/docs/Analysis_Engine.md).
+
 ---
 
 ## Research artifacts
@@ -21,7 +67,7 @@ of completed work.
 
 ---
 
-## Experimental summary
+## Historical experimental summary (not rerun in this pass)
 
 In the included match harnesses and fixed experimental settings, DataGo recorded:
 
@@ -641,7 +687,9 @@ using identical networks and 800-visit shallow budgets. Because DataGo performs
 additional deep searches on selected positions, these are not compute-matched
 comparisons and should not be interpreted as proof of the inequality above.
 
-**The extra strength derives from targeted deep searches and reuse of stored 2k-visit analyses**, effectively increasing the visit count on hard positions without changing the base configuration.
+The proposed source of improvement is targeted deep search and reuse of stored
+analyses. Attribution requires an ablation with matched total compute; the
+historical records alone do not establish that causal claim.
 
 ---
 

@@ -79,6 +79,7 @@ class CustomMCTS:
         dirichlet_alpha: float = 0.03,
         dirichlet_epsilon: float = 0.25,
         virtual_loss: float = 3.0,
+        random_state: int = 7,
     ):
         """
         Initialize custom MCTS.
@@ -92,6 +93,9 @@ class CustomMCTS:
             dirichlet_epsilon: Weight of Dirichlet noise at root
             virtual_loss: Virtual loss to encourage parallel exploration
         """
+        if not all(math.isfinite(x) for x in (c_puct, temperature, dirichlet_alpha, dirichlet_epsilon)) or c_puct < 0 or temperature < 0 or dirichlet_alpha < 0 or not 0 <= dirichlet_epsilon <= 1:
+            raise ValueError("invalid search hyperparameters")
+        self.rng = np.random.default_rng(random_state)
         self.network_evaluator = network_evaluator
         self.c_puct = c_puct
         self.temperature = temperature
@@ -122,6 +126,8 @@ class CustomMCTS:
             - move_probabilities: Dict mapping moves to visit-based probabilities
             - estimated_value: Average value from root
         """
+        if not isinstance(num_simulations, int) or num_simulations < 1:
+            raise ValueError("num_simulations must be a positive integer")
         # Create or reuse root node
         if current_node is None:
             self.root = MCTSNode(position_hash=position_hash)
@@ -180,10 +186,23 @@ class CustomMCTS:
         """
         # Get network evaluation
         policy, value = self.network_evaluator(node.position_hash)
+        if not math.isfinite(value) or not -1 <= value <= 1:
+            raise ValueError("evaluator values must be in [-1,1], from side-to-move perspective")
+        if not policy:
+            node.is_terminal = True
+            node.terminal_value = node.network_value = value
+            return
         
         # Use modified prior if provided (RAG blending!)
         if modified_prior is not None:
+            if not set(modified_prior).issubset(policy):
+                raise ValueError("modified prior contains an action absent from the legal policy")
             policy = modified_prior
+
+        if any(not math.isfinite(p) or p < 0 for p in policy.values()) or sum(policy.values()) <= 0:
+            raise ValueError("policy must have finite nonnegative positive mass")
+        total = sum(policy.values())
+        policy = {move: p / total for move, p in policy.items()}
         
         node.network_policy = policy
         node.network_value = value
@@ -219,7 +238,7 @@ class CustomMCTS:
         
         for child in node.children.values():
             # Q value (exploitation)
-            q_value = child.q_value
+            q_value = -child.q_value  # Child statistics use the opponent's perspective.
             
             # U value (exploration)
             u_value = (
@@ -263,7 +282,7 @@ class CustomMCTS:
             return
         
         # Generate Dirichlet noise
-        noise = np.random.dirichlet(
+        noise = self.rng.dirichlet(
             [self.dirichlet_alpha] * len(node.children)
         )
         
@@ -298,17 +317,17 @@ class CustomMCTS:
         if self.temperature == 0:
             # Deterministic: pick most visited
             max_visits = max(visits.values())
-            probs = {
-                move: 1.0 if count == max_visits else 0.0
-                for move, count in visits.items()
-            }
+            best_move = next(move for move, count in visits.items() if count == max_visits)
+            probs = {move: float(move == best_move) for move in visits}
         else:
             # Temperature-scaled visit counts
             visit_counts = np.array(list(visits.values()))
             if self.temperature == 1.0:
                 scaled = visit_counts
             else:
-                scaled = visit_counts ** (1.0 / self.temperature)
+                # Log domain avoids overflow for small positive temperatures.
+                logs = np.log(np.maximum(visit_counts, 1)) / self.temperature
+                scaled = np.exp(logs - logs.max()) * (visit_counts > 0)
             
             # Normalize
             total = scaled.sum()

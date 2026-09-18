@@ -1,0 +1,111 @@
+{
+  "seed": 7,
+  "scope": "128 noisy synthetic retrieval queries; known six-state adversarial tree, not Go",
+  "retrieval": [
+    {
+      "backend": "numpy",
+      "query_gain": 0.1,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "numpy",
+      "query_gain": 1,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "numpy",
+      "query_gain": 10,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "faiss",
+      "query_gain": 0.1,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "faiss",
+      "query_gain": 1,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "faiss",
+      "query_gain": 10,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "hnsw",
+      "query_gain": 0.1,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "hnsw",
+      "query_gain": 1,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    },
+    {
+      "backend": "hnsw",
+      "query_gain": 10,
+      "top1_recovery": 1.0,
+      "max_score_change_after_save_and_gain": 0.0
+    }
+  ],
+  "search": [
+    {
+      "prior": "misleading prior",
+      "simulations": 4,
+      "safe_probability": 0.25,
+      "root_value": -0.5
+    },
+    {
+      "prior": "helpful stored prior",
+      "simulations": 4,
+      "safe_probability": 0.75,
+      "root_value": 0.15
+    },
+    {
+      "prior": "misleading prior",
+      "simulations": 16,
+      "safe_probability": 0.75,
+      "root_value": 0.01875000000000002
+    },
+    {
+      "prior": "helpful stored prior",
+      "simulations": 16,
+      "safe_probability": 0.9375,
+      "root_value": 0.26249999999999996
+    },
+    {
+      "prior": "misleading prior",
+      "simulations": 64,
+      "safe_probability": 0.875,
+      "root_value": 0.1484375
+    },
+    {
+      "prior": "helpful stored prior",
+      "simulations": 64,
+      "safe_probability": 0.96875,
+      "root_value": 0.27031250000000034
+    },
+    {
+      "prior": "misleading prior",
+      "simulations": 256,
+      "safe_probability": 0.93359375,
+      "root_value": 0.21640624999999925
+    },
+    {
+      "prior": "helpful stored prior",
+      "simulations": 256,
+      "safe_probability": 0.9921875,
+      "root_value": 0.29257812499999863
+    }
+  ],
+  "caveat": "Helpful prior is hand-specified. Its acquisition cost is not modeled; this is not a fair-compute strength comparison."
+}
